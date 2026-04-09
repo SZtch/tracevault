@@ -21,7 +21,7 @@ log = logging.getLogger("tracevault.triage")
 # ── Config ────────────────────────────────────────────────────────────────────
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 # Hard cap: we only feed the top N retrieved incidents to the brief so the
 # prompt stays concise. The caller already limits search results to top_k.

@@ -26,7 +26,7 @@ except ImportError:
 # ── Config — all overridable via environment variables ────────────────────────
 DB_ADDR    = os.getenv("VECTORAI_DB_ADDR", "localhost:50051")
 COLLECTION = os.getenv("VECTORAI_COLLECTION", "tracevault_incidents")
-DIM        = int(os.getenv("VECTORAI_DIM", "512"))  # 512 reduces hash collisions vs 256
+DIM        = int(os.getenv("VECTORAI_DIM", "384"))  # all-MiniLM-L6-v2 outputs 384-dim vectors
 
 
 def stable_id(incident_id: str) -> int:
@@ -38,12 +38,28 @@ def stable_id(incident_id: str) -> int:
     return int(hashlib.sha256(incident_id.encode()).hexdigest(), 16) % (2 ** 31)
 
 
+try:
+    from sentence_transformers import SentenceTransformer
+    _st_model = SentenceTransformer("all-MiniLM-L6-v2")
+    _ST_AVAILABLE = True
+except ImportError:
+    _st_model = None
+    _ST_AVAILABLE = False
+    print("⚠️  sentence-transformers not installed — run: pip install sentence-transformers")
+
+
 def embed(text: str, dim: int = DIM) -> List[float]:
     """
-    Local embedding — no API key, no internet.
-    Hashing trick: deterministic, fast, fully offline.
-    Bigrams added for better phrase-level matching.
+    Semantic embedding using sentence-transformers (all-MiniLM-L6-v2).
+    - Fully offline after first model download (~80MB)
+    - 384-dim output, cosine-normalized
+    - Understands paraphrases: "pool exhausted" ≈ "ran out of connections"
+    Falls back to hash trick if sentence-transformers is unavailable.
     """
+    if _ST_AVAILABLE and _st_model is not None:
+        return _st_model.encode(text, normalize_embeddings=True).tolist()
+
+    # Fallback: hash trick (offline, no dependencies)
     tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
     vec = np.zeros(dim, dtype=np.float32)
     for t in tokens:

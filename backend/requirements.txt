@@ -6,3 +6,4 @@ python-dotenv>=1.0.0
 anthropic>=0.28.0
 # actian_vectorai: install manually from .whl provided in the hackathon kit
 # pip install actian_vectorai-0.1.0b2-py3-none-any.whl
+sentence-transformers>=2.7.0
