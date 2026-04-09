@@ -171,22 +171,6 @@ Go to [http://localhost:3000](http://localhost:3000) and try one of the demo que
 
 ---
 
-### Without Docker (backend only)
-
-```bash
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-pip install actian_vectorai-0.1.0b2-py3-none-any.whl
-
-# Run VectorAI DB in a separate container
-docker run -d -p 50051:50051 -v tracevault_data:/data williamimoh/actian-vectorai-db:latest
-
-uvicorn api:app --reload --port 8000
-```
-
----
-
 ## Deploying online (Vercel + Railway)
 
 ### Architecture
@@ -349,5 +333,6 @@ Only `title` is required. The more fields you fill in, the better the retrieval 
 | `VECTORAI_DIM` | Backend | `384` | Embedding dimension |
 | `FRONTEND_URL` | Backend (Railway) | — | Vercel URL — locks CORS in production |
 | `ANTHROPIC_API_KEY` | Backend | — | Enables triage briefs (optional) |
+| `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Model used for triage briefs |
 | `NEXT_PUBLIC_API_URL` | Frontend (Vercel) | — | Railway backend public URL |
 | `VECTORAI_WHL_URL` | Backend build arg | — | SDK `.whl` URL if not committed to repo |
