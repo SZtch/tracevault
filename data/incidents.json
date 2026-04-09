@@ -1,0 +1,807 @@
+[
+  {
+    "id": "INC-001",
+    "title": "Database connection pool exhausted under traffic spike",
+    "error_message": "HikariPool-1 - Connection is not available, request timed out after 30000ms",
+    "stack_trace": "com.zaxxer.hikari.pool.HikariPool$PoolInitializationException\n  at com.zaxxer.hikari.pool.HikariPool.checkFailFast\n  at com.zaxxer.hikari.pool.HikariPool.<init>\n  at com.zaxxer.hikari.HikariDataSource.<init>\n  at com.app.db.DataSourceConfig.dataSource",
+    "root_cause": "Connection pool size was set to 10, but traffic spike caused 50+ concurrent requests. Pool exhausted under load, new requests blocked waiting for a connection that never freed.",
+    "fix": "Increased pool size to 50. Added connection timeout fallback. Implemented circuit breaker pattern. Added pool utilization metric to dashboards.",
+    "service": "user-service",
+    "severity": "critical",
+    "date": "2024-11-15T03:22:00Z",
+    "tags": [
+      "database",
+      "connection-pool",
+      "timeout",
+      "hikari"
+    ]
+  },
+  {
+    "id": "INC-002",
+    "title": "Memory leak in image processing worker",
+    "error_message": "java.lang.OutOfMemoryError: Java heap space",
+    "stack_trace": "java.lang.OutOfMemoryError: Java heap space\n  at java.awt.image.DataBufferByte.<init>\n  at com.app.ImageProcessor.resize\n  at com.app.MediaWorker.processJob",
+    "root_cause": "BufferedImage objects were not being released after processing. Accumulation over 6 hours caused heap exhaustion. Worker processes images in tight loop without explicit GC hints.",
+    "fix": "Added explicit dispose() calls on BufferedImage. Implemented try-with-resources for image streams. Increased heap to 4GB as temporary fix. Added heap usage alerting at 80%.",
+    "service": "media-service",
+    "severity": "high",
+    "date": "2024-10-28T14:10:00Z",
+    "tags": [
+      "memory-leak",
+      "java",
+      "image-processing",
+      "heap"
+    ]
+  },
+  {
+    "id": "INC-003",
+    "title": "Redis cache stampede on cold start",
+    "error_message": "MISSES spike: 99.8% cache miss rate detected. DB CPU at 100%",
+    "stack_trace": "RedisException: Connection refused\n  at redis.clients.jedis.Connection.connect\n  at redis.clients.jedis.BinaryJedis.connect\n  at com.app.cache.RedisCache.get",
+    "root_cause": "After Redis restart, all cache keys expired simultaneously. Thundering herd hit the DB directly with 10,000 req/s.",
+    "fix": "Implemented cache warming script on startup. Added jitter to TTL values. Introduced probabilistic early expiration to prevent simultaneous expiry.",
+    "service": "product-service",
+    "severity": "high",
+    "date": "2024-09-05T08:44:00Z",
+    "tags": [
+      "redis",
+      "cache",
+      "stampede",
+      "thundering-herd"
+    ]
+  },
+  {
+    "id": "INC-004",
+    "title": "Kubernetes pod OOMKilled loop in analytics worker",
+    "error_message": "OOMKilled: exit code 137. Pod restarted 14 times in 30 minutes.",
+    "stack_trace": "Container exceeded memory limit of 512Mi. Last known state: OOMKilled.\nkubectl describe pod analytics-worker-7d4f9b: OOMKilled",
+    "root_cause": "A new analytics query was loading entire user activity table into memory. No pagination was implemented. Table had grown to 80M rows since query was last tested.",
+    "fix": "Refactored query to use streaming cursor with batch size of 1000. Increased pod memory limit to 1Gi as interim fix. Added memory profiling to CI pipeline.",
+    "service": "analytics-service",
+    "severity": "critical",
+    "date": "2024-12-01T19:30:00Z",
+    "tags": [
+      "kubernetes",
+      "oom",
+      "memory",
+      "analytics",
+      "worker"
+    ]
+  },
+  {
+    "id": "INC-005",
+    "title": "Deadlock in order processing transactions",
+    "error_message": "SQLState: 40001 - Deadlock found when trying to get lock; try restarting transaction",
+    "stack_trace": "com.mysql.jdbc.exceptions.jdbc4.MySQLTransactionRollbackException: Deadlock found\n  at sun.reflect.NativeConstructorAccessorImpl.newInstance0\n  at com.app.order.OrderRepository.updateStock\n  at com.app.order.OrderService.placeOrder",
+    "root_cause": "Two transactions acquiring locks on order and inventory tables in opposite order. Race condition under high order volume (Black Friday weekend).",
+    "fix": "Standardized lock acquisition order across all transactions. Added retry logic with exponential backoff for deadlock errors. Reduced transaction scope.",
+    "service": "order-service",
+    "severity": "critical",
+    "date": "2024-08-20T12:05:00Z",
+    "tags": [
+      "deadlock",
+      "mysql",
+      "transaction",
+      "locks",
+      "database"
+    ]
+  },
+  {
+    "id": "INC-006",
+    "title": "API rate limit breach causing 429 cascade on payment batch",
+    "error_message": "HTTP 429 Too Many Requests from Stripe API. Retry-After: 60",
+    "stack_trace": "stripe.error.RateLimitError: Request rate limit reached for requests/min\n  at stripe.api_requestor.APIRequestor.interpret_response\n  at stripe.api_requestor.APIRequestor.request",
+    "root_cause": "Batch job sending 1000 payment status checks in parallel. Stripe limit is 100 req/s. No rate limiting on our side. Retry logic made things worse by doubling request volume.",
+    "fix": "Implemented token bucket rate limiter. Switched to Stripe webhooks instead of polling. Added queue with 50 req/s limit. Retry now uses exponential backoff with jitter.",
+    "service": "payment-service",
+    "severity": "high",
+    "date": "2024-07-14T09:15:00Z",
+    "tags": [
+      "rate-limit",
+      "stripe",
+      "api",
+      "429",
+      "retry-storm"
+    ]
+  },
+  {
+    "id": "INC-007",
+    "title": "SSL certificate expiry causing auth failures",
+    "error_message": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate has expired (_ssl.c:1129)",
+    "stack_trace": "ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED]\n  at urllib3.connectionpool.HTTPSConnectionPool._new_conn\n  at urllib3.connectionpool.HTTPSConnectionPool._make_request",
+    "root_cause": "SSL cert for internal auth service expired. Auto-renewal cron job had silently failed 30 days earlier due to permission change on cert directory.",
+    "fix": "Renewed certificate manually. Fixed cron job (was running as wrong user). Added 30-day-before-expiry alerting via Datadog.",
+    "service": "auth-service",
+    "severity": "critical",
+    "date": "2024-06-03T00:01:00Z",
+    "tags": [
+      "ssl",
+      "certificate",
+      "auth",
+      "expiry"
+    ]
+  },
+  {
+    "id": "INC-008",
+    "title": "Elasticsearch index shard allocation failure",
+    "error_message": "cluster_block_exception: blocked by: [FORBIDDEN/12/index read-only / allow delete (api)]",
+    "stack_trace": "elasticsearch.exceptions.RequestError: RequestError(403, 'cluster_block_exception')\n  at elasticsearch.transport.Transport.perform_request\n  at elasticsearch.client.Elasticsearch.index",
+    "root_cause": "Disk usage exceeded 85% threshold. Elasticsearch auto-applied read-only mode to protect data integrity. Logs index had not been rotated for 3 months.",
+    "fix": "Freed disk space by deleting old indices. Lowered watermark thresholds. Added disk usage alerting at 70%. Enabled ILM policy for automatic log rotation.",
+    "service": "search-service",
+    "severity": "high",
+    "date": "2024-05-18T16:42:00Z",
+    "tags": [
+      "elasticsearch",
+      "disk",
+      "read-only",
+      "shard"
+    ]
+  },
+  {
+    "id": "INC-009",
+    "title": "gRPC deadline exceeded on recommendation engine inference",
+    "error_message": "StatusCode.DEADLINE_EXCEEDED: Deadline of 2000ms exceeded",
+    "stack_trace": "grpc._channel._InactiveRpcError: <_InactiveRpcError of RPC that terminated with:\n  status = StatusCode.DEADLINE_EXCEEDED\n  details = \"Deadline Exceeded\"\n  debug_error_string = \"UNKNOWN:Error received from peer {grpc_message:\"Deadline Exceeded\"}\"",
+    "root_cause": "ML model inference taking 3-5s under load. Default 2s gRPC deadline was too aggressive. Model had not been optimized post-deployment and was running on CPU-only nodes.",
+    "fix": "Increased gRPC deadline to 10s. Added async inference queue. Deployed quantized model (4x faster). Added P99 latency alerting at 1.5s.",
+    "service": "recommendation-service",
+    "severity": "medium",
+    "date": "2024-04-22T11:30:00Z",
+    "tags": [
+      "grpc",
+      "deadline",
+      "timeout",
+      "ml",
+      "latency"
+    ]
+  },
+  {
+    "id": "INC-010",
+    "title": "Null pointer exception in user profile aggregation",
+    "error_message": "NullPointerException at UserProfileAggregator.java:142 - preferences field not initialized",
+    "stack_trace": "java.lang.NullPointerException\n  at com.app.UserProfileAggregator.aggregate(UserProfileAggregator.java:142)\n  at com.app.ProfileService.getProfile(ProfileService.java:78)",
+    "root_cause": "New users created via OAuth flow did not have preferences object initialized. Legacy code assumed preferences always exists.",
+    "fix": "Added null check with default preferences initialization. Updated user creation flow to always create preferences object. Added integration test for OAuth user flow.",
+    "service": "profile-service",
+    "severity": "medium",
+    "date": "2024-03-10T15:20:00Z",
+    "tags": [
+      "null-pointer",
+      "java",
+      "oauth",
+      "user-profile"
+    ]
+  },
+  {
+    "id": "INC-011",
+    "title": "Kafka consumer lag spike \u2014 messages not processing",
+    "error_message": "Consumer group lag: 2,847,293 messages. Processing rate: 0 msg/s",
+    "stack_trace": "org.apache.kafka.common.errors.SerializationException: Error deserializing key/value for partition events-0\n  at org.apache.kafka.clients.consumer.internals.Fetcher.parseRecord\n  at org.apache.kafka.clients.consumer.internals.Fetcher.fetchRecords",
+    "root_cause": "A schema change in producer introduced a new required field. Consumers without the updated schema failed to deserialize and halted. All partitions blocked on the bad message.",
+    "fix": "Rolled back producer schema change. Deployed consumers with updated schema. Implemented schema registry to prevent future mismatches. Added consumer lag alerting at 50k messages.",
+    "service": "event-service",
+    "severity": "critical",
+    "date": "2024-02-28T07:55:00Z",
+    "tags": [
+      "kafka",
+      "consumer-lag",
+      "schema",
+      "serialization",
+      "queue"
+    ]
+  },
+  {
+    "id": "INC-012",
+    "title": "CORS error blocking frontend requests after gateway deployment",
+    "error_message": "Access to XMLHttpRequest blocked by CORS policy: No 'Access-Control-Allow-Origin' header",
+    "stack_trace": "TypeError: Failed to fetch\n  at ProductsPage.loadProducts (ProductsPage.js:45)\n  at ProductsPage.componentDidMount (ProductsPage.js:22)",
+    "root_cause": "New API gateway deployment overwrote CORS configuration. Staging environment had different gateway version that preserved config. Config was not stored in IaC.",
+    "fix": "Restored CORS config on API gateway. Added CORS config to Terraform. Added smoke test that checks CORS headers on deploy.",
+    "service": "api-gateway",
+    "severity": "high",
+    "date": "2024-01-19T13:00:00Z",
+    "tags": [
+      "cors",
+      "api-gateway",
+      "frontend",
+      "deployment"
+    ]
+  },
+  {
+    "id": "INC-013",
+    "title": "Connection pool timeout in payment service during peak checkout",
+    "error_message": "HikariPool-2 - Connection is not available, request timed out after 30000ms. Pool stats: total=20, active=20, idle=0, waiting=47",
+    "stack_trace": "com.zaxxer.hikari.pool.HikariPool$PoolInitializationException\n  at com.zaxxer.hikari.pool.HikariPool.getConnection\n  at com.app.payment.PaymentRepository.save\n  at com.app.payment.PaymentService.processCheckout",
+    "root_cause": "Payment service pool capped at 20 connections. Flash sale caused 10x normal checkout volume. Long-running fraud check queries held connections for 8-12s each, starving the pool.",
+    "fix": "Increased pool to 40. Moved fraud check to async post-processing. Added connection wait timeout metric. Separated read and write pools.",
+    "service": "payment-service",
+    "severity": "critical",
+    "date": "2025-01-10T18:45:00Z",
+    "tags": [
+      "database",
+      "connection-pool",
+      "timeout",
+      "hikari",
+      "payment"
+    ]
+  },
+  {
+    "id": "INC-014",
+    "title": "Postgres max_connections exceeded \u2014 all services degraded",
+    "error_message": "FATAL: remaining connection slots are reserved for non-replication superuser connections",
+    "stack_trace": "org.postgresql.util.PSQLException: FATAL: remaining connection slots are reserved for non-replication superuser connections\n  at org.postgresql.core.v3.ConnectionFactoryImpl.doAuthentication\n  at org.postgresql.core.v3.ConnectionFactoryImpl.openConnectionImpl",
+    "root_cause": "Postgres max_connections set to 100. Connection pools across 8 microservices each set to 20 = 160 potential connections. A deploy restart of all services simultaneously saturated the limit.",
+    "fix": "Deployed PgBouncer as connection pooler (now handles 2000 app connections \u2192 80 Postgres connections). Set per-service pool max to 10. Added pg_stat_activity alerting.",
+    "service": "db-platform",
+    "severity": "critical",
+    "date": "2025-02-03T09:00:00Z",
+    "tags": [
+      "postgres",
+      "database",
+      "connection-pool",
+      "max-connections",
+      "pgbouncer"
+    ]
+  },
+  {
+    "id": "INC-015",
+    "title": "Slow query causing table lock and cascading timeouts",
+    "error_message": "ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction. Query running for 184s.",
+    "stack_trace": "com.mysql.cj.jdbc.exceptions.CommunicationsException: Lock wait timeout exceeded\n  at com.app.catalog.ProductRepository.bulkUpdate\n  at com.app.catalog.CatalogSyncJob.run",
+    "root_cause": "Catalog sync job running full-table UPDATE without batching. Locked rows blocked all read queries on the products table. Missing index on updated_at column caused full table scan.",
+    "fix": "Added index on updated_at. Batched UPDATE into 500-row chunks with commit between batches. Scheduled job to run during low-traffic window. Query timeout set to 30s.",
+    "service": "catalog-service",
+    "severity": "high",
+    "date": "2025-01-22T14:30:00Z",
+    "tags": [
+      "database",
+      "mysql",
+      "slow-query",
+      "lock",
+      "timeout",
+      "index"
+    ]
+  },
+  {
+    "id": "INC-016",
+    "title": "Read replica lag causing stale order data",
+    "error_message": "Replication lag: 47s. Read queries returning data 47 seconds behind primary.",
+    "stack_trace": "",
+    "root_cause": "Heavy write load on primary during end-of-month invoicing batch. Replica fell behind by 47 seconds. Order status reads routed to replica returned stale 'pending' state for already-completed orders.",
+    "fix": "Routed order status reads to primary. Added replica lag metric with 5s alert threshold. Deferred invoicing batch to off-peak hours.",
+    "service": "order-service",
+    "severity": "medium",
+    "date": "2024-12-31T23:10:00Z",
+    "tags": [
+      "database",
+      "replication",
+      "read-replica",
+      "lag",
+      "stale-data"
+    ]
+  },
+  {
+    "id": "INC-017",
+    "title": "DB pool leak after ORM version upgrade",
+    "error_message": "HikariPool connection leak detected. Stack trace of leaked connection: idle timeout 600000ms exceeded",
+    "stack_trace": "HikariPool - Connection leak detection triggered for connection com.mysql.cj.jdbc.ConnectionImpl@7f3d1a2b, stack trace follows\n  at com.app.notification.NotificationRepo.findPending",
+    "root_cause": "ORM upgrade changed lazy session closing behavior. Connections no longer auto-closed at end of request. Regression not caught in staging due to lower concurrency.",
+    "fix": "Explicitly closed sessions in finally block. Added connection leak detection timeout (30s). Rolled back ORM version on notification-service until fix deployed.",
+    "service": "notification-service",
+    "severity": "medium",
+    "date": "2025-01-05T10:00:00Z",
+    "tags": [
+      "database",
+      "connection-pool",
+      "leak",
+      "orm",
+      "hikari"
+    ]
+  },
+  {
+    "id": "INC-018",
+    "title": "N+1 query pattern causing DB saturation",
+    "error_message": "DB CPU: 98%. Slow query log: 14,000 queries/sec against product_variants table.",
+    "stack_trace": "",
+    "root_cause": "New product listing endpoint fetched base products (1 query) then fetched variants for each product individually (N queries). Page load of 200 products fired 201 queries per request.",
+    "fix": "Rewrote endpoint to use JOIN with eager loading. Added query count assertion in integration tests (must be < 5 per request). DB CPU dropped to 12% post-deploy.",
+    "service": "catalog-service",
+    "severity": "high",
+    "date": "2025-03-01T11:15:00Z",
+    "tags": [
+      "database",
+      "n-plus-one",
+      "query",
+      "performance",
+      "orm"
+    ]
+  },
+  {
+    "id": "INC-019",
+    "title": "Billing service connection pool exhausted during invoice batch run",
+    "error_message": "HikariPool-billing - Connection is not available, request timed out after 30000ms. Pool stats: total=15, active=15, idle=0, waiting=47",
+    "stack_trace": "",
+    "root_cause": "Monthly invoice batch job was scheduled at 18:00, coinciding with peak billing API traffic. Batch held connections for 45\u201390s per invoice group, starving live API requests. Pool size of 15 was undersized for concurrent batch + API load.",
+    "fix": "Rescheduled invoice batch to 02:00. Increased pool size to 30. Added a separate pool for batch jobs (pool-batch, max=10) to isolate batch from API traffic. Added pool utilization alert at 70%.",
+    "service": "billing-service",
+    "severity": "critical",
+    "date": "2025-02-18T15:30:00Z",
+    "tags": [
+      "database",
+      "connection-pool",
+      "timeout",
+      "billing"
+    ]
+  },
+  {
+    "id": "INC-020",
+    "title": "Query plan regression after Postgres statistics update",
+    "error_message": "Slow query: SELECT * FROM orders JOIN line_items ... execution time 43210ms (was 120ms)",
+    "stack_trace": "EXPLAIN ANALYZE output: Seq Scan on orders (cost=0.00..892341.00 rows=4500000)\n  Filter: (status = 'pending')\n  Rows Removed by Filter: 44982103",
+    "root_cause": "ANALYZE updated table statistics, causing the query planner to switch from index scan to sequential scan on orders table (45M rows). The new plan was 360x slower.",
+    "fix": "Created partial index on orders(status) WHERE status='pending'. Forced index hint as temporary workaround. Added query regression tests with execution time bounds.",
+    "service": "reporting-service",
+    "severity": "high",
+    "date": "2025-01-28T08:20:00Z",
+    "tags": [
+      "database",
+      "postgres",
+      "query-plan",
+      "slow-query",
+      "regression"
+    ]
+  },
+  {
+    "id": "INC-021",
+    "title": "gRPC deadline exceeded on inventory availability check",
+    "error_message": "StatusCode.DEADLINE_EXCEEDED: Deadline of 500ms exceeded on InventoryService/CheckAvailability",
+    "stack_trace": "grpc._channel._InactiveRpcError: <_InactiveRpcError of RPC that terminated with:\n  status = StatusCode.DEADLINE_EXCEEDED\n  details = \"Deadline Exceeded\"\ngrpc.StatusCode.DEADLINE_EXCEEDED\n  at checkout_service.inventory_client.check_availability",
+    "root_cause": "Inventory service performing synchronous DB lookup on each call. Under Black Friday load, DB query latency rose to 800ms. 500ms deadline set at checkout service was too tight.",
+    "fix": "Increased deadline to 2000ms. Added in-memory cache for availability (TTL 5s). Moved inventory checks to async pre-validation step. P99 latency now 120ms.",
+    "service": "inventory-service",
+    "severity": "high",
+    "date": "2024-11-29T10:00:00Z",
+    "tags": [
+      "grpc",
+      "deadline",
+      "timeout",
+      "inventory",
+      "latency"
+    ]
+  },
+  {
+    "id": "INC-022",
+    "title": "Upstream payment provider timeout causing checkout cascade failure",
+    "error_message": "ReadTimeoutError: HTTPSConnectionPool(host='api.paymentprovider.com', port=443): Read timed out. (read timeout=5)",
+    "stack_trace": "requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='api.paymentprovider.com', port=443): Read timed out.\n  at checkout_service.payment.gateway.charge\n  at checkout_service.order.processor.finalize_order",
+    "root_cause": "Payment provider experienced an internal outage. Their API responses took 30-60s. Our 5s timeout triggered, but no fallback or circuit breaker existed. All checkouts failed for 22 minutes.",
+    "fix": "Implemented circuit breaker (opens after 5 failures in 30s). Added fallback to secondary payment provider. Introduced async payment confirmation flow so checkout no longer blocks on provider response.",
+    "service": "checkout-service",
+    "severity": "critical",
+    "date": "2024-10-14T16:22:00Z",
+    "tags": [
+      "api-timeout",
+      "upstream-failure",
+      "payment",
+      "circuit-breaker",
+      "timeout"
+    ]
+  },
+  {
+    "id": "INC-023",
+    "title": "Retry storm from notification service overloading email API",
+    "error_message": "HTTP 503 Service Unavailable from SendGrid. Retry queue depth: 284,000. Sending rate: 0/s",
+    "stack_trace": "sendgrid.exceptions.UnauthorizedError: 503 Service Unavailable\n  at notification_service.email.sender.send\n  at notification_service.worker.process_job\n  at celery.app.trace.trace_task",
+    "root_cause": "SendGrid had a 15-minute degradation. Notification service retried immediately with no backoff, multiplying request volume by 50x. Retry queue grew to 284k items and caused worker memory pressure.",
+    "fix": "Implemented exponential backoff with jitter on retries. Added max retry limit (5 attempts). Capped retry queue depth at 10k with dead-letter queue for overflow. Added SendGrid status page webhook.",
+    "service": "notification-service",
+    "severity": "critical",
+    "date": "2024-09-18T14:05:00Z",
+    "tags": [
+      "retry-storm",
+      "api-timeout",
+      "upstream-failure",
+      "email",
+      "queue-backlog"
+    ]
+  },
+  {
+    "id": "INC-024",
+    "title": "HTTP 504 gateway timeout on search endpoint under load",
+    "error_message": "HTTP 504 Gateway Timeout. Upstream timed out (110: Connection timed out) while reading response header from upstream",
+    "stack_trace": "nginx error: upstream timed out (110: Connection timed out) while reading response header from upstream\nupstream: \"http://search-service:8080/api/search?q=...\"",
+    "root_cause": "Search service Elasticsearch queries spiked to 8s under autocomplete load. NGINX upstream timeout was 3s. 40% of search requests were timing out, causing users to see 504 errors.",
+    "fix": "Increased NGINX upstream timeout to 15s. Added query result caching (TTL 30s) for top 1000 queries. Optimized Elasticsearch query from multi-match to simpler term query for autocomplete path.",
+    "service": "api-gateway",
+    "severity": "high",
+    "date": "2024-12-08T19:00:00Z",
+    "tags": [
+      "api-timeout",
+      "http-504",
+      "gateway",
+      "nginx",
+      "upstream-failure"
+    ]
+  },
+  {
+    "id": "INC-025",
+    "title": "Circuit breaker stuck open \u2014 pricing service returning fallback values",
+    "error_message": "CircuitBreakerOpenException: pricing-service circuit breaker is OPEN. Fallback: returning cached prices from 6 hours ago.",
+    "stack_trace": "io.github.resilience4j.circuitbreaker.CallNotPermittedException: CircuitBreaker 'pricing-service' is OPEN and does not permit further calls\n  at com.app.product.PricingClient.getPrice\n  at com.app.product.ProductService.enrichWithPricing",
+    "root_cause": "Pricing service deployment failed silently \u2014 pods were running but returning 500s. Circuit breaker opened correctly, but recovery check interval was set to 60 minutes, keeping it open long after pricing service recovered.",
+    "fix": "Reduced circuit breaker probe interval to 30s. Added deployment health check that validates pricing endpoints return 200. Set up PagerDuty alert when circuit breaker opens for >5 minutes.",
+    "service": "pricing-service",
+    "severity": "high",
+    "date": "2025-02-14T11:30:00Z",
+    "tags": [
+      "circuit-breaker",
+      "upstream-failure",
+      "api",
+      "fallback",
+      "pricing"
+    ]
+  },
+  {
+    "id": "INC-026",
+    "title": "gRPC channel exhaustion under sustained ML inference load",
+    "error_message": "StatusCode.UNAVAILABLE: Connection refused. All subchannels are in transient failure state.",
+    "stack_trace": "grpc._channel._InactiveRpcError: StatusCode.UNAVAILABLE\n  details = \"Connection refused\"\n  at ml_gateway.inference_client.predict\n  at ml_gateway.request_handler.handle",
+    "root_cause": "gRPC channel pool was not configured. All inference requests shared a single channel with max 100 concurrent streams. At 500 RPS, streams backed up, channel entered TRANSIENT_FAILURE, all requests failed.",
+    "fix": "Configured channel pool (10 channels \u00d7 100 streams = 1000 concurrent). Added per-channel health checks. Implemented fallback to synchronous REST endpoint when gRPC unavailable.",
+    "service": "ml-service",
+    "severity": "high",
+    "date": "2025-01-19T22:00:00Z",
+    "tags": [
+      "grpc",
+      "deadline",
+      "timeout",
+      "ml",
+      "channel-pool",
+      "upstream-failure"
+    ]
+  },
+  {
+    "id": "INC-027",
+    "title": "upstream timeout cascade \u2014 recommendation service down",
+    "error_message": "timeout calling recommendation svc, returning empty list",
+    "stack_trace": "",
+    "root_cause": "recommendation service slow due to model reload, homepage started returning empty recs, users saw blank recommendations section",
+    "fix": "added timeout fallback to return cached popular items, set 800ms timeout with fallback",
+    "service": "recommendation-service",
+    "severity": "medium",
+    "date": "2025-03-05T09:45:00Z",
+    "tags": [
+      "api-timeout",
+      "upstream-failure",
+      "recommendation",
+      "fallback"
+    ]
+  },
+  {
+    "id": "INC-028",
+    "title": "Exponential retry loop from shipping webhook causing provider block",
+    "error_message": "HTTP 429 from FedEx Webhook API. IP blocked after 50,000 requests in 10 minutes.",
+    "stack_trace": "requests.exceptions.HTTPError: 429 Client Error: Too Many Requests\n  at shipping_service.webhook.notifier.deliver\n  at shipping_service.celery_tasks.retry_webhook",
+    "root_cause": "Shipping webhook delivery task set to retry every 1 second on failure with no max_retries cap. A FedEx API degradation triggered infinite fast retries. One stuck task generated 50k requests in 10 minutes.",
+    "fix": "Set max_retries=5 with exponential backoff starting at 60s. Added dead-letter queue for exhausted retries. IP unblock requested from FedEx after rate limiter deployed.",
+    "service": "shipping-service",
+    "severity": "high",
+    "date": "2025-01-30T07:15:00Z",
+    "tags": [
+      "retry-storm",
+      "api-timeout",
+      "rate-limit",
+      "webhook",
+      "upstream-failure"
+    ]
+  },
+  {
+    "id": "INC-029",
+    "title": "Service mesh timeout misconfiguration cutting long-running export requests",
+    "error_message": "upstream request timeout after 15s. Export job was 40% complete.",
+    "stack_trace": "Error: context deadline exceeded\n  at grpc.(*ClientConn).Invoke\n  at export_service.client.RequestExport\nistio timeout: 15s global policy applied",
+    "root_cause": "Istio mesh-wide default timeout of 15s applied to all routes. Long-running CSV export requests take 30-120s for large accounts. Global timeout silently truncated them at 15s with no error surfaced to users.",
+    "fix": "Added per-route timeout override for export endpoints (300s). Added progress API so frontend polls instead of waiting on HTTP. Documented Istio timeout precedence in runbook.",
+    "service": "export-service",
+    "severity": "medium",
+    "date": "2025-02-20T14:00:00Z",
+    "tags": [
+      "api-timeout",
+      "grpc",
+      "istio",
+      "service-mesh",
+      "timeout"
+    ]
+  },
+  {
+    "id": "INC-030",
+    "title": "Kafka partition rebalance causing 12-minute consumer processing gap",
+    "error_message": "Consumer group rebalancing. All consumers paused. Lag growing: +18,000 msg/min during rebalance.",
+    "stack_trace": "org.apache.kafka.clients.consumer.internals.AbstractCoordinator: Attempt to heartbeat failed since group is rebalancing\n  at org.apache.kafka.clients.consumer.KafkaConsumer.poll\n  at com.app.events.OrderEventConsumer.run",
+    "root_cause": "Rolling deploy of event-service caused repeated consumer group rebalances. Each new pod joining triggered a full rebalance (12 topics \u00d7 20 partitions each). Rebalance took 2-3 minutes, pausing all consumption.",
+    "fix": "Enabled incremental cooperative rebalancing (CooperativeStickyAssignor). Added consumer startup stagger (30s between pod starts). Lag recovered within 4 minutes post-deploy. Added rebalance duration metric.",
+    "service": "event-service",
+    "severity": "high",
+    "date": "2025-02-10T16:00:00Z",
+    "tags": [
+      "kafka",
+      "consumer-lag",
+      "queue",
+      "rebalance",
+      "deploy"
+    ]
+  },
+  {
+    "id": "INC-031",
+    "title": "RabbitMQ queue backlog \u2014 notification delivery delayed 4 hours",
+    "error_message": "Queue depth: 1,847,293. Consumer count: 0. Message TTL expiring. Oldest message: 4h 12m",
+    "stack_trace": "pika.exceptions.AMQPConnectionError: [Errno 111] Connection refused\n  at pika.adapters.blocking_connection.BlockingConnection.__init__\n  at notification_service.mq.consumer.start",
+    "root_cause": "RabbitMQ memory high-water mark reached (80% of 4GB). RabbitMQ blocked all publishers and paused consumer delivery. Consumers appeared healthy but received nothing. Alert was set on consumer count, not queue depth.",
+    "fix": "Increased RabbitMQ memory limit. Added queue depth alerting (threshold: 10k). Added lazy queues to reduce memory footprint. Consumers reconnected automatically after memory freed.",
+    "service": "notification-service",
+    "severity": "critical",
+    "date": "2024-12-18T10:30:00Z",
+    "tags": [
+      "rabbitmq",
+      "queue-backlog",
+      "worker",
+      "memory-pressure",
+      "notification"
+    ]
+  },
+  {
+    "id": "INC-032",
+    "title": "Celery worker stuck on poison message \u2014 task queue fully backed up",
+    "error_message": "Task report-service.generate_pdf[a3f1b2c4] received SIGKILL after 3600s. Queue: reports. Pending tasks: 4,281.",
+    "stack_trace": "celery.exceptions.WorkerLostError: Worker exited prematurely: signal 9 (SIGKILL)\n  at celery.worker.consumer.consumer.Consumer.on_task_received\nTask ID: a3f1b2c4-...\nReport ID: RPT-00891 (malformed template)",
+    "root_cause": "A malformed report template caused the PDF generator to loop infinitely on one task. Celery worker was single-threaded for that queue. One stuck task blocked all subsequent report generation for 47 minutes.",
+    "fix": "Added task time limit (300s hard, 240s soft). Moved stuck task to dead-letter queue. Switched report workers to concurrency=4. Added task age alerting when oldest pending task > 60s.",
+    "service": "report-service",
+    "severity": "high",
+    "date": "2025-01-08T13:00:00Z",
+    "tags": [
+      "celery",
+      "worker-stuck",
+      "queue-backlog",
+      "poison-message",
+      "batch-processing"
+    ]
+  },
+  {
+    "id": "INC-033",
+    "title": "SQS queue depth alarm \u2014 file processing 6 hours behind",
+    "error_message": "CloudWatch Alarm: FileProcessingQueue depth > 100,000. Oldest message age: 6h 14m. Expected processing: <5min.",
+    "stack_trace": "",
+    "root_cause": "S3 bucket policy change blocked GetObject permissions for the file processing worker IAM role. Workers received messages, attempted to fetch files, got AccessDenied, and requeueed silently instead of dead-lettering.",
+    "fix": "Restored IAM permissions. Added explicit dead-letter queue for S3 access errors. Changed error handling to DLQ on permission errors (non-retryable). Added queue age metric to dashboards.",
+    "service": "file-processing-service",
+    "severity": "high",
+    "date": "2025-01-15T08:30:00Z",
+    "tags": [
+      "sqs",
+      "queue-backlog",
+      "worker",
+      "iam",
+      "batch-processing"
+    ]
+  },
+  {
+    "id": "INC-034",
+    "title": "Batch analytics job exhausting memory \u2014 OOM killed midway",
+    "error_message": "MemoryError: Unable to allocate 18.2 GiB for array. Process killed (OOMKilled). Job failed at 67% completion.",
+    "stack_trace": "Traceback (most recent call last):\n  File \"analytics/monthly_aggregation.py\", line 312, in run_aggregation\n    df = pd.read_sql(query, conn)  # loads full result set\n  File \"pandas/io/sql.py\", line 1748, in read_sql\nnumpy.core._exceptions._ArrayMemoryError: Unable to allocate 18.2 GiB",
+    "root_cause": "Monthly analytics aggregation loaded 90 days of raw event data into a pandas DataFrame in a single read_sql call. Dataset had grown 5x since the query was written. Node had 16GB RAM.",
+    "fix": "Rewrote using chunked iteration (chunksize=50000). Moved aggregation to Spark job on EMR. Added memory profiling to analytics CI. Job now completes in 8 minutes using 2GB peak.",
+    "service": "analytics-service",
+    "severity": "critical",
+    "date": "2025-02-01T03:00:00Z",
+    "tags": [
+      "memory-pressure",
+      "oom",
+      "batch-processing",
+      "analytics",
+      "worker"
+    ]
+  },
+  {
+    "id": "INC-035",
+    "title": "Worker process hung on external geocoding API \u2014 batch import stalled",
+    "error_message": "No heartbeat from import-worker-3 for 900s. Batch job stalled at record 14,200/80,000.",
+    "stack_trace": "",
+    "root_cause": "geocoding api hung, worker waiting with no timeout set",
+    "fix": "added 10s timeout to geocoding calls, added worker heartbeat monitoring",
+    "service": "data-pipeline",
+    "severity": "high",
+    "date": "2025-02-25T05:00:00Z",
+    "tags": [
+      "worker-stuck",
+      "batch-processing",
+      "timeout",
+      "api-timeout",
+      "queue-backlog"
+    ]
+  },
+  {
+    "id": "INC-036",
+    "title": "Kafka consumer group lag growing \u2014 batch event processor stuck behind",
+    "error_message": "Consumer group batch-processor lag: 892,441 messages. Topic: user-events. Processing rate degraded: 200 msg/s (normal: 12,000 msg/s)",
+    "stack_trace": "org.apache.kafka.clients.consumer.CommitFailedException: Commit cannot be completed since the group has already rebalanced\n  at org.apache.kafka.clients.consumer.internals.ConsumerCoordinator.sendOffsetCommitRequest\n  at com.app.batch.EventBatchProcessor.commitOffsets",
+    "root_cause": "Batch processor handling took 8s per batch but max.poll.interval.ms was 5s. Kafka treated slow consumers as dead, triggered rebalances, preventing offset commits. Processing slowed to near-zero while fighting constant rebalances.",
+    "fix": "Increased max.poll.interval.ms to 30s. Reduced max.poll.records to 50 so batch size fits within interval. Consumer lag cleared in 25 minutes post-fix.",
+    "service": "data-pipeline",
+    "severity": "critical",
+    "date": "2025-01-20T06:00:00Z",
+    "tags": [
+      "kafka",
+      "consumer-lag",
+      "queue-backlog",
+      "batch-processing",
+      "worker-stuck"
+    ]
+  },
+  {
+    "id": "INC-037",
+    "title": "Memory pressure from unbounded in-memory session store",
+    "error_message": "Container memory usage: 7.8GB / 8GB limit. GC pause: 12s. Response times: 8000ms (P99). Approaching OOMKill.",
+    "stack_trace": "java.lang.OutOfMemoryError: GC overhead limit exceeded\n  at java.util.HashMap.resize\n  at java.util.HashMap.putVal\n  at com.app.session.InMemorySessionStore.put\n  at com.app.auth.SessionManager.createSession",
+    "root_cause": "Session store backed by HashMap with no eviction policy. Sessions kept in memory indefinitely. After 48 hours of traffic, store held 4.2M sessions consuming 7.8GB. GC couldn't keep up.",
+    "fix": "Replaced in-memory store with Redis (TTL 24h). Added JVM heap alerting at 80%. Existing sessions migrated with 30-minute overlap. Memory usage dropped to 400MB.",
+    "service": "auth-service",
+    "severity": "critical",
+    "date": "2025-01-25T04:00:00Z",
+    "tags": [
+      "memory-pressure",
+      "oom",
+      "session",
+      "java",
+      "heap"
+    ]
+  },
+  {
+    "id": "INC-038",
+    "title": "Batch invoice generation job stalled by database lock contention",
+    "error_message": "Batch job billing_monthly_invoices paused at 3,421/48,000. Lock wait timeout exceeded on invoices table.",
+    "stack_trace": "com.mysql.cj.jdbc.exceptions.CommunicationsException: Lock wait timeout exceeded; try restarting transaction\n  at com.app.billing.InvoiceRepository.markGenerated\n  at com.app.billing.InvoiceBatchJob.processChunk",
+    "root_cause": "Monthly invoice batch job and real-time invoice creation API both competing for row locks on the invoices table. Batch job held locks for 2-3s per row due to slow PDF generation in same transaction.",
+    "fix": "Separated PDF generation from the database transaction. Batch job now marks records, releases lock, then generates PDF. Lock contention eliminated. Batch job completes 8x faster.",
+    "service": "billing-service",
+    "severity": "high",
+    "date": "2024-12-03T02:00:00Z",
+    "tags": [
+      "database",
+      "lock",
+      "batch-processing",
+      "billing",
+      "timeout"
+    ]
+  },
+  {
+    "id": "INC-039",
+    "title": "Worker queue backed up \u2014 email sends delayed 3 hours",
+    "error_message": "email queue depth 45000 workers not keeping up",
+    "stack_trace": "",
+    "root_cause": "marketing campaign send triggered at 9am caused 45k emails to queue simultaneously, only 3 workers running, each email taking 400ms",
+    "fix": "auto-scaled workers to 20 for campaign sends, added queue depth dashboard",
+    "service": "email-service",
+    "severity": "high",
+    "date": "2025-03-10T09:30:00Z",
+    "tags": [
+      "queue-backlog",
+      "worker",
+      "email",
+      "batch-processing",
+      "memory-pressure"
+    ]
+  },
+  {
+    "id": "INC-040",
+    "title": "gRPC deadline exceeded \u2014 user-facing latency spike during model warmup",
+    "error_message": "StatusCode.DEADLINE_EXCEEDED on PersonalizationService/GetRecommendations. 68% of requests failing. Deadline: 1000ms.",
+    "stack_trace": "grpc._channel._InactiveRpcError: <_InactiveRpcError of RPC that terminated with:\n  status = StatusCode.DEADLINE_EXCEEDED\n  details = \"Deadline Exceeded\"\n  at personalization.grpc_client.get_recommendations\n  at homepage.handler.build_homepage",
+    "root_cause": "Cold model deployment: new ML model version required 45s warmup after pod start. During warmup, model serving latency was 2000ms+. 1000ms deadline triggered on nearly all requests. Rolling deploy started 3 new pods simultaneously.",
+    "fix": "Added pod readiness probe that calls model warmup endpoint before accepting traffic. Set minReadySeconds=60 on deployment. Staged rollout: one pod at a time with 2-minute wait.",
+    "service": "personalization-service",
+    "severity": "high",
+    "date": "2025-02-28T10:00:00Z",
+    "tags": [
+      "grpc",
+      "deadline",
+      "timeout",
+      "ml",
+      "cold-start",
+      "latency"
+    ]
+  },
+  {
+    "id": "INC-041",
+    "title": "Connection pool contention causing intermittent DB timeouts on reporting",
+    "error_message": "PoolTimeoutError: QueuePool limit of size 5 overflow 10 reached, connection timed out, timeout 30",
+    "stack_trace": "sqlalchemy.exc.TimeoutError: QueuePool limit of size 5 overflow 10 reached, connection timed out, timeout 30\n  at sqlalchemy.pool.impl.QueuePool.connect\n  at reporting.db.session_factory\n  at reporting.views.generate_dashboard",
+    "root_cause": "Reporting service SQLAlchemy pool sized for light use (5+10). New BI dashboard feature caused 8 concurrent long-running queries per user (each query 15-30s). Two simultaneous dashboard loads exhausted the pool.",
+    "fix": "Increased pool size to 30. Added read-only replica endpoint for dashboard queries. Set statement_timeout=20s to prevent runaway queries holding connections indefinitely.",
+    "service": "reporting-service",
+    "severity": "medium",
+    "date": "2025-03-08T16:20:00Z",
+    "tags": [
+      "database",
+      "connection-pool",
+      "timeout",
+      "reporting",
+      "sqlalchemy"
+    ]
+  },
+  {
+    "id": "INC-042",
+    "title": "Upstream geocoding API timeout causing address validation worker to stall",
+    "error_message": "requests.exceptions.ReadTimeout: HTTPConnectionPool(host='geocode.internal', port=8080): Read timed out after 60s. Worker idle: 900s.",
+    "stack_trace": "requests.exceptions.ReadTimeout\n  at address_service.geocoding.validate_address\n  at address_service.worker.process_validation_queue\nTask pending: 12,847 addresses in queue",
+    "root_cause": "Internal geocoding microservice had a thread deadlock causing 100% of requests to hang indefinitely. Address validation worker had no timeout on HTTP calls. One hung call froze the entire worker thread for 15 minutes.",
+    "fix": "Added 10s connect/30s read timeout to all geocoding calls. Added health check to geocoding service (deadlock detection). Worker now skips and requeues on timeout. Fixed geocoding deadlock (ThreadPoolExecutor misuse).",
+    "service": "address-service",
+    "severity": "high",
+    "date": "2025-02-07T11:00:00Z",
+    "tags": [
+      "api-timeout",
+      "worker-stuck",
+      "upstream-failure",
+      "queue-backlog",
+      "timeout"
+    ]
+  },
+  {
+    "id": "INC-043",
+    "title": "Memory leak in PDF rendering worker causing weekly OOMKill",
+    "error_message": "java.lang.OutOfMemoryError: Java heap space at com.itextpdf.kernel.pdf.PdfWriter. Pod OOMKilled every ~7 days.",
+    "stack_trace": "java.lang.OutOfMemoryError: Java heap space\n  at com.itextpdf.kernel.pdf.PdfWriter.<init>\n  at com.itextpdf.kernel.pdf.PdfDocument.<init>\n  at com.app.billing.PdfGenerator.generateInvoice",
+    "root_cause": "iText PdfDocument objects not closed after PDF generation. Each document leaked ~2MB of native memory off-heap. Over 7 days, 500 invoices/day \u00d7 2MB = 3.5GB leaked. Pod limit was 4GB. Weekly restart was masking the issue.",
+    "fix": "Wrapped PdfDocument in try-with-resources. Added native memory monitoring (not just JVM heap). Pod uptime now exceeds 30 days without OOMKill. Added integration test that generates 1000 PDFs and checks memory growth.",
+    "service": "billing-service",
+    "severity": "high",
+    "date": "2025-01-03T02:00:00Z",
+    "tags": [
+      "memory-leak",
+      "oom",
+      "worker",
+      "pdf",
+      "java",
+      "batch-processing"
+    ]
+  },
+  {
+    "id": "INC-044",
+    "title": "API gateway upstream timeout \u2014 product search returning 504s",
+    "error_message": "upstream timed out (110: Connection timed out) while reading upstream, client: 203.0.113.45, upstream: http://search-service/search",
+    "stack_trace": "nginx: upstream timed out (110: Connection timed out)\n2025/03/12 14:22:11 [error] 29#29: *12847 upstream timed out",
+    "root_cause": "Search service Elasticsearch query slow due to a large unoptimized aggregation query added in last deploy. API gateway had 5s timeout. Query was taking 12s. 100% of search requests returned 504 for 35 minutes.",
+    "fix": "Reverted Elasticsearch aggregation query. Increased timeout to 20s as hotfix. Optimized query with terms aggregation instead of script aggregation. Query now runs in 800ms.",
+    "service": "api-gateway",
+    "severity": "critical",
+    "date": "2025-03-12T14:20:00Z",
+    "tags": [
+      "api-timeout",
+      "http-504",
+      "gateway",
+      "upstream-failure",
+      "elasticsearch"
+    ]
+  },
+  {
+    "id": "INC-045",
+    "title": "Batch processing delay \u2014 nightly ETL job running 6x longer than expected",
+    "error_message": "ETL job user_events_daily_rollup: expected completion 02:00 UTC, still running at 06:47 UTC. Downstream reports blocked.",
+    "stack_trace": "",
+    "root_cause": "A new event type added to user_events table increased daily row count from 50M to 340M. ETL job had no partitioning strategy \u2014 full table scan on every run. Runtime scaled linearly with data volume.",
+    "fix": "Partitioned user_events table by date. ETL now processes only yesterday's partition. Runtime reduced from 6h to 22 minutes. Added job duration SLA alerting (fails if >90 min).",
+    "service": "data-pipeline",
+    "severity": "high",
+    "date": "2025-02-12T07:00:00Z",
+    "tags": [
+      "batch-processing",
+      "etl",
+      "performance",
+      "database",
+      "queue-backlog"
+    ]
+  }
+]

@@ -1,0 +1,15 @@
+# Root .dockerignore — applies to root Dockerfile (Railway builds)
+frontend/
+frontend/node_modules/
+frontend/.next/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.env
+**/.env.*
+!**/.env.example
+**/venv/
+**/.venv/
+.git/
+.github/
+*.md

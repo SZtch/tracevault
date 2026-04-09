@@ -1,0 +1,544 @@
+"""
+TraceVault - VectorAI DB client wrapper
+Uses actian_vectorai SDK (b2 API)
+"""
+
+import os
+import re
+import hashlib
+import numpy as np
+from typing import List, Dict, Any, Optional
+
+try:
+    from actian_vectorai import (
+        VectorAIClient,
+        Distance,
+        Field,
+        FilterBuilder,
+        PointStruct,
+        VectorParams,
+    )
+    VECTORAI_AVAILABLE = True
+except ImportError:
+    VECTORAI_AVAILABLE = False
+    print("⚠️  actian_vectorai not installed — run: pip install actian_vectorai-0.1.0b2-py3-none-any.whl")
+
+# ── Config — all overridable via environment variables ────────────────────────
+DB_ADDR    = os.getenv("VECTORAI_DB_ADDR", "localhost:50051")
+COLLECTION = os.getenv("VECTORAI_COLLECTION", "tracevault_incidents")
+DIM        = int(os.getenv("VECTORAI_DIM", "512"))  # 512 reduces hash collisions vs 256
+
+
+def stable_id(incident_id: str) -> int:
+    """
+    Deterministic integer ID from incident string ID.
+    Using loop index (id=i) silently corrupts data when reindexing partial
+    datasets or adding incidents to an existing collection.
+    """
+    return int(hashlib.sha256(incident_id.encode()).hexdigest(), 16) % (2 ** 31)
+
+
+def embed(text: str, dim: int = DIM) -> List[float]:
+    """
+    Local embedding — no API key, no internet.
+    Hashing trick: deterministic, fast, fully offline.
+    Bigrams added for better phrase-level matching.
+    """
+    tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
+    vec = np.zeros(dim, dtype=np.float32)
+    for t in tokens:
+        vec[hash(t) % dim] += 1.0
+        if len(t) > 3:
+            vec[hash(t[:3]) % dim] += 0.5
+    for a, b in zip(tokens, tokens[1:]):
+        vec[hash(f"{a}_{b}") % dim] += 0.75
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec /= norm
+    return vec.tolist()
+
+
+# ── Stack trace mining ────────────────────────────────────────────────────────
+
+def _extract_exception_class(stack_trace: str) -> str:
+    """
+    Extract the short exception class name from the first line of a stack trace.
+    Handles both Java (com.foo.SomeException: message) and Python formats.
+
+    Examples:
+      "com.zaxxer.hikari.pool.HikariPool$PoolInitializationException: ..."
+        → "PoolInitializationException"
+      "grpc._channel._InactiveRpcError: <_InactiveRpcError ..."
+        → "_InactiveRpcError"
+      "org.apache.kafka.common.errors.SerializationException: ..."
+        → "SerializationException"
+    """
+    if not stack_trace:
+        return ""
+    first_line = stack_trace.strip().splitlines()[0]
+    class_part = first_line.split(":")[0].strip()
+    # Short name: last component after dots, then after $ (inner classes)
+    short = class_part.split(".")[-1].split("$")[-1]
+    # Accept only if it looks like a class/exception identifier:
+    # starts with capital or underscore, longer than 3 chars, no spaces
+    if len(short) > 3 and " " not in short and re.match(r"[A-Z_]", short):
+        return short
+    # Fallback: full dotted identifier — only if it has no spaces (qualified name)
+    if " " not in class_part and ("." in class_part or "_" in class_part):
+        return class_part
+    return ""
+
+
+def _extract_stack_methods(stack_trace: str, max_frames: int = 4) -> List[str]:
+    """
+    Extract ClassName.methodName pairs from stack frames.
+    Prefers app-level frames over framework/stdlib internals.
+    Skips lines that look like pure infrastructure (java.lang, sun., etc.).
+
+    Used for:
+    1. Adding to retrieval text (boosted method token signal)
+    2. Storing in payload for match explanation
+    """
+    if not stack_trace:
+        return []
+    methods: List[str] = []
+    skip_prefixes = ("java.lang", "java.util", "sun.", "jdk.", "com.sun",
+                     "org.springframework.cglib", "net.sf.cglib")
+    for line in stack_trace.splitlines()[1:]:
+        line = line.strip()
+        if line.startswith("at "):
+            # Java: "at com.app.payment.PaymentRepo.save(PaymentRepo.java:42)"
+            m = re.match(r"at\s+([\w.$]+)\(", line)
+            if m:
+                full = m.group(1)
+                if any(full.startswith(p) for p in skip_prefixes):
+                    continue
+                parts = full.split(".")
+                method     = parts[-1] if parts else full
+                class_name = parts[-2] if len(parts) > 1 else ""
+                if class_name:
+                    methods.append(f"{class_name}.{method}")
+        elif line.startswith("File "):
+            # Python: "File "path/to/file.py", line 42, in method_name"
+            m = re.search(r'in\s+(\w+)\s*$', line)
+            if m and m.group(1) not in ("__init__", "<module>"):
+                methods.append(m.group(1))
+        if len(methods) >= max_frames:
+            break
+    return methods
+
+
+# ── Retrieval text construction ───────────────────────────────────────────────
+
+def build_searchable_text(incident: Dict[str, Any], exception_class: str = "") -> str:
+    """
+    Build the text that gets embedded for vector retrieval.
+
+    Field weights (by repetition count):
+      title          ×4   — most informative, densest signal
+      error_message  ×3   — raw error string; directly matches what engineers search
+      tags           ×3   — precision-labeled by engineers; each token is high-value
+      service        ×2   — primary grouping dimension; also hyphen-normalized
+      exception_class×2   — unique type identifier extracted from stack trace
+      root_cause     ×1   — first sentence only (avoids prose dilution)
+      stack_head     ×1   — top 3 lines of trace (exception + nearest frames)
+
+    Intentionally excluded:
+      fix            —  solution text pollutes problem-space retrieval.
+                        "Added circuit breaker" in fix makes an incident rank for
+                        circuit-breaker queries even if the problem is unrelated.
+      root_cause (full)— narrative prose adds generic words (increased, deployed,
+                        added, caused) that overlap across unrelated incidents.
+    """
+    title         = incident.get("title", "").strip()
+    error_message = incident.get("error_message", "").strip()
+    service       = incident.get("service", "").strip()
+    service_norm  = service.replace("-", " ")  # "payment-service" → "payment service"
+    tags          = " ".join(incident.get("tags", []))
+
+    # First sentence of root_cause — problem context without full narrative
+    raw_cause      = incident.get("root_cause", "").strip()
+    first_sentence = re.split(r'(?<=[.!?])\s', raw_cause)[0] if raw_cause else ""
+
+    # Stack trace: exception line + top 2 frames only
+    raw_trace  = incident.get("stack_trace", "")
+    stack_head = "\n".join(raw_trace.splitlines()[:3]) if raw_trace else ""
+
+    parts = [
+        # ── Tier 1 — highest signal ───────────────────────────────────────
+        title, title, title, title,
+        error_message, error_message, error_message,
+        tags, tags, tags,
+        # ── Tier 2 — structural identifiers ──────────────────────────────
+        service, service, service_norm,
+        exception_class, exception_class,
+        # ── Tier 3 — supporting context ──────────────────────────────────
+        first_sentence,
+        stack_head,
+    ]
+    return " ".join(p.strip() for p in parts if p.strip())
+
+
+# ── Match explanation ─────────────────────────────────────────────────────────
+
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "in", "on", "at", "to", "for",
+    "of", "is", "was", "with", "after", "caused", "by", "due",
+    "its", "all", "had", "not", "from", "this", "that", "but",
+}
+
+# Map tag subsets → human-readable failure mode labels.
+# Checked in order; first match wins.
+_FAILURE_MODES: List[tuple] = [
+    ({"connection-pool", "hikari"},                              "connection pool exhaustion"),
+    ({"connection-pool", "pgbouncer"},                          "connection pool exhaustion"),
+    ({"connection-pool", "timeout"},                            "connection pool timeout"),
+    ({"max-connections", "postgres"},                           "Postgres connection limit"),
+    ({"deadlock", "transaction"},                               "database deadlock"),
+    ({"slow-query", "query-plan"},                              "query plan regression"),
+    ({"slow-query", "index"},                                   "missing index / slow query"),
+    ({"n-plus-one"},                                            "N+1 query pattern"),
+    ({"replication", "read-replica"},                           "read replica lag"),
+    ({"grpc", "deadline"},                                      "gRPC deadline exceeded"),
+    ({"retry-storm", "rate-limit"},                             "retry storm / rate limiting"),
+    ({"retry-storm"},                                           "retry storm"),
+    ({"upstream-failure", "circuit-breaker"},                   "circuit breaker / upstream failure"),
+    ({"api-timeout", "http-504"},                               "gateway timeout (504)"),
+    ({"api-timeout", "upstream-failure"},                       "upstream service timeout"),
+    ({"kafka", "consumer-lag", "rebalance"},                    "Kafka rebalance / consumer lag"),
+    ({"kafka", "consumer-lag"},                                 "Kafka consumer lag"),
+    ({"kafka", "schema"},                                       "Kafka schema mismatch"),
+    ({"rabbitmq", "queue-backlog"},                             "RabbitMQ queue backlog"),
+    ({"celery", "worker-stuck"},                                "stuck Celery worker"),
+    ({"celery", "poison-message"},                              "poison message in task queue"),
+    ({"sqs", "queue-backlog"},                                  "SQS queue backlog"),
+    ({"memory-leak", "heap"},                                   "JVM heap memory leak"),
+    ({"memory-leak", "oom"},                                    "memory leak → OOM"),
+    ({"memory-pressure", "oom"},                                "memory pressure / OOM"),
+    ({"oom", "kubernetes"},                                     "Kubernetes OOMKill"),
+    ({"batch-processing", "etl"},                               "slow ETL / batch job"),
+    ({"batch-processing", "worker-stuck"},                      "stuck batch worker"),
+    ({"queue-backlog", "worker"},                               "worker queue backlog"),
+]
+
+
+def _infer_failure_mode(tags: List[str]) -> str:
+    tag_set = set(tags)
+    for keywords, label in _FAILURE_MODES:
+        if keywords.issubset(tag_set):
+            return label
+    # Fallback: single-tag match
+    for keywords, label in _FAILURE_MODES:
+        if keywords & tag_set:
+            return label
+    return ""
+
+
+def _tok(text: str) -> set:
+    """Tokenise text, lowercase, strip stopwords, min length 3."""
+    return {t for t in re.findall(r"[a-zA-Z0-9]+", text.lower())
+            if t not in _STOPWORDS and len(t) > 2}
+
+
+def build_match_reason(query: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a structured match explanation by checking query tokens against
+    individual payload fields, not a single merged blob.
+
+    Returns a dict with:
+      matched_terms  — list[str]   all tokens that matched (backward-compat)
+      match_reason   — str         one readable sentence: what matched and where
+      failure_mode   — str         inferred failure class ("connection pool exhaustion")
+      primary_signal — str         what drove the match most (exception_class / error_message / …)
+      context_hints  — list[str]   short chips: ["same service", "exception match", …]
+      match_signals  — dict        full structured breakdown for frontend inspection
+    """
+    q_tokens = _tok(query)
+
+    title_match   = sorted(q_tokens & _tok(payload.get("title", "")),          key=lambda x: -len(x))
+    error_match   = sorted(q_tokens & _tok(payload.get("error_message", "")), key=lambda x: -len(x))
+    service_match = sorted(q_tokens & _tok(payload.get("service", "").replace("-", " ")), key=lambda x: -len(x))
+    exc_match     = sorted(q_tokens & _tok(payload.get("exception_class", "")), key=lambda x: -len(x))
+    stack_match   = sorted(q_tokens & _tok(payload.get("stack_methods_text", "")), key=lambda x: -len(x))
+
+    tags_list  = [t for t in payload.get("tags", "").split(",") if t]
+    tags_match = sorted(q_tokens & _tok(" ".join(tags_list)), key=lambda x: -len(x))
+
+    failure_mode = _infer_failure_mode(tags_list)
+    service      = payload.get("service", "")
+    exc_class    = payload.get("exception_class", "")
+    severity     = payload.get("severity", "")
+
+    # ── Primary signal — highest-specificity hit wins ─────────────────────────
+    # Ordered: exact type > raw error > service+mode > mode only > title > semantic
+    if exc_match and exc_class:
+        primary_signal = "exception_class"
+    elif error_match:
+        primary_signal = "error_message"
+    elif service_match and failure_mode:
+        primary_signal = "service_failure"
+    elif tags_match and failure_mode:
+        primary_signal = "failure_mode"
+    elif title_match:
+        primary_signal = "title"
+    else:
+        primary_signal = "semantic"
+
+    # ── match_reason — one sentence, scannable in under 2 seconds ─────────────
+    # Pattern: "{identifier} in {service} — {failure mode}"
+    # Prefer the actual exception class name (specific, not a token fragment)
+    # over raw matched error tokens, which can look like noise.
+    subject = ""
+    if exc_class:
+        # Use the stored exception class whether or not it token-matched the query.
+        # It's the most precise identifier for what went wrong in this incident.
+        subject = exc_class
+    elif error_match:
+        # Most informative matched error tokens as a short phrase
+        subject = " ".join(error_match[:2])
+
+    location = f"in {service}" if service and service_match else ""
+    mode_clause = f"— {failure_mode}" if failure_mode else ""
+
+    if subject and location and mode_clause:
+        match_reason = f"{subject} {location} {mode_clause}"
+    elif subject and mode_clause:
+        match_reason = f"{subject} {mode_clause}"
+    elif subject and location:
+        match_reason = f"{subject} {location}"
+    elif failure_mode and service_match:
+        match_reason = f"{failure_mode} in {service}"
+    elif failure_mode:
+        match_reason = failure_mode
+    elif title_match:
+        match_reason = f"Similar incident — {', '.join(title_match[:3])}"
+    else:
+        match_reason = "Semantically similar failure pattern"
+
+    # ── context_hints — short chips that surface alignment factors ────────────
+    # Each hint answers "in what way is this result relevant?"
+    context_hints: List[str] = []
+
+    if exc_match and exc_class:
+        context_hints.append("exception match")
+    if service_match:
+        context_hints.append("same service")
+    if stack_match:
+        context_hints.append("stack overlap")
+    if error_match and not exc_match:
+        context_hints.append("error message match")
+    if tags_match and not failure_mode:
+        context_hints.append("tag overlap")
+    elif tags_match:
+        context_hints.append("tag overlap")
+    if severity == "critical":
+        context_hints.append("critical severity")
+
+    # ── All matched terms (flat list for backward compat) ────────────────────
+    seen: Dict[str, None] = {}
+    for term in (exc_match + error_match + title_match + tags_match +
+                 service_match + stack_match):
+        seen[term] = None
+    all_matched = list(seen.keys())[:8]
+
+    return {
+        "matched_terms":  all_matched,
+        "match_reason":   match_reason,
+        "failure_mode":   failure_mode,
+        "primary_signal": primary_signal,
+        "context_hints":  context_hints[:4],  # cap for visual cleanliness
+        "match_signals": {
+            "title":        title_match[:3],
+            "error":        error_match[:3],
+            "tags":         tags_match[:4],
+            "service":      service_match[:2],
+            "exception":    exc_match[:2],
+            "stack":        stack_match[:2],
+            "failure_mode": failure_mode,
+            "severity":     severity,
+        },
+    }
+
+
+def get_client():
+    if not VECTORAI_AVAILABLE:
+        raise RuntimeError(
+            "actian_vectorai not installed — "
+            "run: pip install actian_vectorai-0.1.0b2-py3-none-any.whl"
+        )
+    return VectorAIClient(DB_ADDR)
+
+
+def init_collection(client, recreate: bool = False):
+    if recreate and client.collections.exists(COLLECTION):
+        client.collections.delete(COLLECTION)
+    if not client.collections.exists(COLLECTION):
+        client.collections.create(
+            COLLECTION,
+            vectors_config=VectorParams(size=DIM, distance=Distance.Cosine),
+        )
+        print(f"✅ Collection '{COLLECTION}' created (dim={DIM})")
+
+
+def index_incidents(incidents: List[Dict[str, Any]]) -> int:
+    with get_client() as client:
+        init_collection(client)
+        points = []
+        for inc in incidents:
+            incident_id = inc.get("id", "")
+
+            # ── Extract structured signals before building retrieval text ───
+            exception_class    = _extract_exception_class(inc.get("stack_trace", ""))
+            stack_methods      = _extract_stack_methods(inc.get("stack_trace", ""))
+            stack_methods_text = " ".join(stack_methods)
+
+            retrieval_text = build_searchable_text(inc, exception_class=exception_class)
+
+            point_id = (
+                stable_id(incident_id) if incident_id
+                else abs(hash(retrieval_text)) % (2 ** 31)
+            )
+
+            points.append(PointStruct(
+                id=point_id,
+                vector=embed(retrieval_text),
+                payload={
+                    # ── Display fields (shown to user) ──────────────────
+                    "incident_id":    incident_id or "UNKNOWN",
+                    "title":          inc.get("title", ""),
+                    "error_message":  inc.get("error_message", ""),
+                    "root_cause":     inc.get("root_cause", ""),
+                    "fix":            inc.get("fix", ""),
+                    "service":        inc.get("service", "unknown"),
+                    "severity":       inc.get("severity", "medium"),
+                    "date":           inc.get("date", ""),
+                    "tags":           ",".join(inc.get("tags", [])),
+                    # ── Explanation fields (used by build_match_reason) ──
+                    "exception_class":    exception_class,
+                    "stack_methods_text": stack_methods_text,
+                    # ── Debug / introspection ───────────────────────────
+                    "retrieval_text": retrieval_text,
+                },
+            ))
+        client.points.upsert(COLLECTION, points)
+        print(f"✅ Indexed {len(points)} incidents into '{COLLECTION}'")
+        return len(points)
+
+
+def search_incidents(
+    query: str,
+    top_k: int = 5,
+    severity: Optional[str] = None,
+    service: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    with get_client() as client:
+        if not client.collections.exists(COLLECTION):
+            return []
+
+        qv = embed(query)
+
+        if severity or service:
+            fb = FilterBuilder()
+            if severity:
+                fb = fb.must(Field("severity").eq(severity))
+            if service:
+                fb = fb.must(Field("service").eq(service))
+            results = client.points.search(
+                COLLECTION, vector=qv, filter=fb.build(),
+                limit=top_k, with_payload=True,
+            )
+        else:
+            results = client.points.search(
+                COLLECTION, vector=qv,
+                limit=top_k, with_payload=True,
+            )
+
+        out = []
+        for r in results:
+            explanation = build_match_reason(query, r.payload)
+            out.append({
+                "id":            r.id,
+                "score":         round(float(r.score), 4),
+                "incident_id":   r.payload.get("incident_id"),
+                "title":         r.payload.get("title"),
+                "error_message": r.payload.get("error_message"),
+                "root_cause":    r.payload.get("root_cause"),
+                "fix":           r.payload.get("fix"),
+                "service":       r.payload.get("service"),
+                "severity":      r.payload.get("severity"),
+                "date":          r.payload.get("date"),
+                "tags":          r.payload.get("tags", "").split(","),
+                # ── Explanation layer ───────────────────────────────────────
+                "matched_terms":  explanation["matched_terms"],
+                "match_reason":   explanation["match_reason"],
+                "failure_mode":   explanation["failure_mode"],
+                "primary_signal": explanation["primary_signal"],
+                "context_hints":  explanation["context_hints"],
+                "match_signals":  explanation["match_signals"],
+            })
+        return out
+
+
+def get_status() -> Dict[str, Any]:
+    try:
+        with get_client() as client:
+            exists      = client.collections.exists(COLLECTION)
+            point_count = None
+            if exists:
+                try:
+                    info        = client.collections.get(COLLECTION)
+                    point_count = getattr(info, "points_count", None)
+                except Exception:
+                    pass
+            return {
+                "connected":         True,
+                "collection_exists": exists,
+                "points_count":      point_count,
+                "db_addr":           DB_ADDR,
+                "collection":        COLLECTION,
+                "dim":               DIM,
+            }
+    except Exception as e:
+        return {"connected": False, "error": str(e), "db_addr": DB_ADDR}
+
+
+def get_collection_meta() -> Dict[str, Any]:
+    """
+    Return distinct services and severities currently indexed.
+    Drives dynamic filter dropdowns in the frontend.
+    """
+    try:
+        with get_client() as client:
+            if not client.collections.exists(COLLECTION):
+                return {"services": [], "severities": []}
+
+            services:   set = set()
+            severities: set = set()
+            offset = None
+
+            while True:
+                batch, next_offset = client.points.scroll(
+                    COLLECTION,
+                    limit=100,
+                    offset=offset,
+                    with_payload=True,
+                    with_vector=False,
+                )
+                for pt in batch:
+                    svc = pt.payload.get("service")
+                    sev = pt.payload.get("severity")
+                    if svc:
+                        services.add(svc)
+                    if sev:
+                        severities.add(sev)
+                if next_offset is None:
+                    break
+                offset = next_offset
+
+            severity_order = ["critical", "high", "medium", "low"]
+            return {
+                "services":   sorted(services),
+                "severities": [s for s in severity_order if s in severities],
+            }
+    except Exception as e:
+        return {"services": [], "severities": [], "error": str(e)}

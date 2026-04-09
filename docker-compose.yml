@@ -1,0 +1,59 @@
+# docker-compose.yml — Local development (full stack, offline-first)
+#
+# Railway does NOT use this file. Railway reads the root Dockerfile directly.
+# See README.md → Deployment → Railway for Railway setup.
+#
+# Quick start:
+#   cp .env.example .env
+#   docker-compose up --build
+#
+# Access:
+#   Frontend (run separately): npm run dev  →  http://localhost:3000
+#   Backend API:                             →  http://localhost:8000
+#   API docs:                                →  http://localhost:8000/docs
+
+version: "3.8"
+
+services:
+
+  # ── VectorAI DB (gRPC, port 50051) ──────────────────────────────────────────
+  vectoraidb:
+    image: williamimoh/actian-vectorai-db:latest
+    container_name: tracevault_db
+    ports:
+      - "${VECTORAI_PORT:-50051}:50051"
+    volumes:
+      # Named volume — DB data persists across restarts and rebuilds
+      - vectorai_data:/data
+    restart: unless-stopped
+    stop_grace_period: 2m
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  # ── FastAPI backend (HTTP) ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: .          # root context — includes both backend/ and data/
+      dockerfile: Dockerfile
+    container_name: tracevault_backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      PORT: "8000"
+      # Docker compose DNS resolves 'vectoraidb' to the container IP
+      VECTORAI_DB_ADDR: "vectoraidb:50051"
+      VECTORAI_COLLECTION: "${VECTORAI_COLLECTION:-tracevault_incidents}"
+      VECTORAI_DIM: "${VECTORAI_DIM:-512}"
+      # Leave FRONTEND_URL unset locally → CORS stays open for dev
+      FRONTEND_URL: "${FRONTEND_URL:-}"
+    depends_on:
+      vectoraidb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  vectorai_data:
