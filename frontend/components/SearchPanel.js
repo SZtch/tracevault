@@ -22,7 +22,7 @@ const DEMO_QUERIES = [
   },
 ]
 
-export default function SearchPanel({ query, setQuery, setResults, setLoading, loading }) {
+export default function SearchPanel({ query, setQuery, setResults, setLoading, loading, setTriageBrief }) {
   const [severity,    setSeverity]    = useState('')
   const [service,     setService]     = useState('')
   const [services,    setServices]    = useState([])
@@ -49,6 +49,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
     setLoading(true)
     setResults([])
     setSearchError(null)
+    if (setTriageBrief) setTriageBrief(null)
     try {
       const res = await fetch(`${API}/search`, {
         method:  'POST',
@@ -66,6 +67,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
       }
       const data = await res.json()
       setResults(data.results || [])
+      if (setTriageBrief) setTriageBrief(data.triage_brief || null)
     } catch (e) {
       setSearchError(e.message || 'Search failed — backend may be unavailable')
       setResults([])

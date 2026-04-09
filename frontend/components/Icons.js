@@ -108,3 +108,12 @@ export function UploadIcon({ className = 'w-4 h-4' }) {
     </svg>
   )
 }
+
+export function ShieldIcon({ className = 'w-4 h-4', style }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 2L3 5.5v5c0 4 3.1 7.5 7 8.5 3.9-1 7-4.5 7-8.5v-5L10 2z" />
+      <polyline points="7,10 9,12 13,8" />
+    </svg>
+  )
+}

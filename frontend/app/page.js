@@ -5,6 +5,7 @@ import SearchPanel from '@/components/SearchPanel'
 import ResultCard from '@/components/ResultCard'
 import StatusBar from '@/components/StatusBar'
 import IndexPanel from '@/components/IndexPanel'
+import TriageBrief from '@/components/TriageBrief'
 import { SearchIcon, DatabaseIcon, ZapIcon } from '@/components/Icons'
 
 // ── Sidebar nav item ───────────────────────────────────────────────────────
@@ -27,10 +28,11 @@ function NavItem({ icon: Icon, label, active, onClick }) {
 }
 
 export default function Home() {
-  const [results, setResults]   = useState([])
-  const [query,   setQuery]     = useState('')
-  const [loading, setLoading]   = useState(false)
-  const [view,    setView]      = useState('search')    // 'search' | 'index'
+  const [results, setResults]         = useState([])
+  const [query,   setQuery]           = useState('')
+  const [loading, setLoading]         = useState(false)
+  const [view,    setView]            = useState('search')    // 'search' | 'index'
+  const [triageBrief, setTriageBrief] = useState(null)
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
@@ -158,6 +160,7 @@ export default function Home() {
               setResults={setResults}
               setLoading={setLoading}
               loading={loading}
+              setTriageBrief={setTriageBrief}
             />
 
             {/* Results zone */}
@@ -238,6 +241,11 @@ export default function Home() {
                     Try a different query or load sample data via the Index tab.
                   </p>
                 </div>
+              )}
+
+              {/* Triage Brief — rendered above result cards when available */}
+              {!loading && triageBrief && results.length > 0 && (
+                <TriageBrief brief={triageBrief} />
               )}
 
               {/* Results header */}

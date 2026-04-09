@@ -29,6 +29,7 @@ except ImportError:
     pass
 
 from vectordb import index_incidents, search_incidents, get_status, get_collection_meta
+from triage import generate_triage_brief
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger("tracevault")
@@ -72,6 +73,8 @@ async def on_startup():
     log.info("  Dim         : %d", DIM)
     log.info("  Environment : %s", _ENV)
     log.info("  Frontend URL: %s", _FRONTEND_URL or "(not set — CORS open)")
+    from triage import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+    log.info("  Triage brief: %s", f"enabled (model={ANTHROPIC_MODEL})" if ANTHROPIC_API_KEY else "disabled (ANTHROPIC_API_KEY not set)")
 
 
 # ── Severity ──────────────────────────────────────────────────────────────────
@@ -414,7 +417,7 @@ def index_default():
 
 @app.post("/search")
 def search(req: SearchRequest):
-    """Semantic similarity search with match explanation."""
+    """Semantic similarity search with match explanation and optional triage brief."""
     try:
         results = search_incidents(
             query    = req.query,
@@ -422,6 +425,15 @@ def search(req: SearchRequest):
             severity = req.severity,
             service  = req.service,
         )
-        return {"query": req.query, "results": results, "count": len(results)}
+        # Generate triage brief from retrieved incidents only.
+        # Returns None if ANTHROPIC_API_KEY is unset or the call fails —
+        # in either case the normal results are returned unaffected.
+        triage_brief = generate_triage_brief(query=req.query, results=results)
+        return {
+            "query":        req.query,
+            "results":      results,
+            "count":        len(results),
+            "triage_brief": triage_brief,
+        }
     except Exception as e:
         raise _db_error(e)
