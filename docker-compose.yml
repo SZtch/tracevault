@@ -47,7 +47,7 @@ services:
       # Docker compose DNS resolves 'vectoraidb' to the container IP
       VECTORAI_DB_ADDR: "vectoraidb:50051"
       VECTORAI_COLLECTION: "${VECTORAI_COLLECTION:-tracevault_incidents}"
-      VECTORAI_DIM: "${VECTORAI_DIM:-512}"
+      VECTORAI_DIM: "${VECTORAI_DIM:-384}"
       # Leave FRONTEND_URL unset locally → CORS stays open for dev
       FRONTEND_URL: "${FRONTEND_URL:-}"
     depends_on:

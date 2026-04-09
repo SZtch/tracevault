@@ -1,55 +1,58 @@
-# Root Dockerfile — used by Railway (build context = project root)
-# Gives the image access to both backend/ and data/ in one build.
-#
-# For local backend-only builds, backend/Dockerfile still works independently.
-
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# ── System deps ───────────────────────────────────────────────────────────────
+# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    netcat-openbsd curl \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python deps ───────────────────────────────────────────────────────────────
-COPY backend/requirements.txt .
+# Python deps (cached layer — only invalidated when requirements.txt changes)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── actian_vectorai SDK ───────────────────────────────────────────────────────
-# PATH A: Set VECTORAI_WHL_URL build arg → downloaded at Railway build time
-# PATH B: Commit actian_vectorai-0.1.0b2-py3-none-any.whl into backend/ → picked up here
-# One of these MUST be set or the build fails.
+# actian_vectorai SDK
+#
+# The wheel is NOT on PyPI. Two install paths:
+#
+#   PATH A (local build): Place actian_vectorai-0.1.0b2-py3-none-any.whl in
+#           backend/ before building. Get it from:
+#           https://github.com/hackmamba-io/actian-vectorAI-db-beta
+#
+#   PATH B (Railway / CI): Set VECTORAI_WHL_URL build arg to a direct download
+#           URL in Railway -> Service -> Settings -> Build Arguments.
+#
+# If neither is provided the build fails immediately with a clear message.
 
 ARG VECTORAI_WHL_URL=""
 
-# Docker COPY doesn't support shell operators (|| etc), so we use a two-step approach:
-# 1. Copy the entire backend dir to a staging location (always succeeds)
-# 2. Let the RUN step check for the .whl and decide what to do
-COPY backend/ /tmp/backend_stage/
+# Docker COPY has no shell fallback syntax (no || operator).
+# Staging the full context first lets the RUN shell glob for the .whl safely.
+COPY . /tmp/backend_stage/
 
 RUN if [ -n "$VECTORAI_WHL_URL" ]; then \
-      echo "Downloading SDK from $VECTORAI_WHL_URL" && \
+      echo "==> Downloading actian_vectorai SDK from $VECTORAI_WHL_URL" && \
       pip install "$VECTORAI_WHL_URL"; \
     elif ls /tmp/backend_stage/actian_vectorai*.whl 1>/dev/null 2>&1; then \
-      echo "Installing SDK from committed .whl" && \
+      echo "==> Installing actian_vectorai SDK from local wheel" && \
       pip install /tmp/backend_stage/actian_vectorai*.whl; \
     else \
       echo ""; \
-      echo "BUILD ERROR: actian_vectorai SDK not found."; \
-      echo "  Fix A: Set VECTORAI_WHL_URL build arg in Railway → Service → Settings → Build"; \
-      echo "  Fix B: Commit actian_vectorai-0.1.0b2-py3-none-any.whl to backend/"; \
+      echo "BUILD ERROR: actian_vectorai SDK wheel not found."; \
+      echo ""; \
+      echo "  Fix: place actian_vectorai-0.1.0b2-py3-none-any.whl in backend/"; \
+      echo "  Source: https://github.com/hackmamba-io/actian-vectorAI-db-beta"; \
       echo ""; \
       exit 1; \
     fi
 
-# ── Application source ────────────────────────────────────────────────────────
-COPY backend/ ./
+# Application source (separate layer for cache efficiency)
+COPY . .
+# NOTE: This Dockerfile's build context is backend/ only — data/ is not included.
+# POST /index/default will return 404 when built with this file in isolation.
+# To use /index/default, build from the project root using the root Dockerfile:
+#   docker build -t tracevault-backend .   (from repo root)
+# or use docker compose up (which uses the root Dockerfile automatically).
 
-# Bake sample data into image. api.py resolves Path(__file__).parent.parent / "data"
-# which is /app/../data = /data when running from /app.
-COPY data/ /data/
-
-# ── Runtime ───────────────────────────────────────────────────────────────────
-# Shell form required — exec form ignores $PORT (Railway injects this).
+# PORT is injected by Railway. Shell form is required — exec form ignores $PORT.
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
