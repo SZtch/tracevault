@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (cached layer — only invalidated when requirements.txt changes)
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # actian_vectorai SDK
@@ -28,7 +28,7 @@ ARG VECTORAI_WHL_URL=""
 
 # Docker COPY has no shell fallback syntax (no || operator).
 # Staging the full context first lets the RUN shell glob for the .whl safely.
-COPY . /tmp/backend_stage/
+COPY backend/ /tmp/backend_stage/
 
 RUN if [ -n "$VECTORAI_WHL_URL" ]; then \
       echo "==> Downloading actian_vectorai SDK from $VECTORAI_WHL_URL" && \
@@ -46,13 +46,12 @@ RUN if [ -n "$VECTORAI_WHL_URL" ]; then \
       exit 1; \
     fi
 
-# Application source (separate layer for cache efficiency)
-COPY . .
-# NOTE: This Dockerfile's build context is backend/ only — data/ is not included.
-# POST /index/default will return 404 when built with this file in isolation.
-# To use /index/default, build from the project root using the root Dockerfile:
-#   docker build -t tracevault-backend .   (from repo root)
-# or use docker compose up (which uses the root Dockerfile automatically).
+# Application source — backend/ contents go to /app so uvicorn finds api.py directly
+COPY backend/ ./
+
+# Bake sample data into image — api.py resolves Path(__file__).parent.parent / "data"
+# = /app/../data = /data when running from /app
+COPY data/ /data/
 
 # PORT is injected by Railway. Shell form is required — exec form ignores $PORT.
 CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
