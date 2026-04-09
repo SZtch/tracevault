@@ -1,8 +1,9 @@
 node_modules/
 .next/
 .env
-.env.*
-pycache/
+.env.local
+.env.*.local
+__pycache__/
 *.pyc
 dist/
 build/
