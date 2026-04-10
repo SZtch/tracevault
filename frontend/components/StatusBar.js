@@ -56,6 +56,17 @@ export default function StatusBar() {
         </div>
       )}
 
+      {/* Embedding degraded warning */}
+      {online && status?.embedding_model && !status.embedding_model.startsWith('all-MiniLM') && (
+        <div
+          className="pl-5 text-[9px] mt-0.5"
+          style={{ color: 'var(--red)', opacity: 0.75 }}
+          title={status.embedding_model}
+        >
+          ⚠ embedding degraded
+        </div>
+      )}
+
       {/* Error detail */}
       {!pending && !online && status?.error && (
         <div

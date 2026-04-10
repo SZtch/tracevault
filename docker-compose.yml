@@ -51,9 +51,10 @@ services:
       # Leave FRONTEND_URL unset locally → CORS stays open for dev
       FRONTEND_URL: "${FRONTEND_URL:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
     depends_on:
       vectoraidb:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

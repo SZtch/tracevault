@@ -177,6 +177,14 @@ def generate_triage_brief(
             log.warning("Triage brief missing keys: %s", missing)
             return None
 
+        # Sanity-check first_response_checks is actually a list
+        if not isinstance(brief.get("first_response_checks"), list):
+            log.warning(
+                "Triage brief: first_response_checks is %s, expected list — discarding brief",
+                type(brief.get("first_response_checks")).__name__,
+            )
+            return None
+
         log.info("Triage brief generated successfully (model=%s)", ANTHROPIC_MODEL)
         return brief
 
