@@ -252,6 +252,8 @@ def _infer_failure_mode(tags: List[str]) -> str:
 
 def _tok(text: str) -> set:
     """Tokenise text, lowercase, strip stopwords, min length 3."""
+    if not text:
+        return set()
     return {t for t in re.findall(r"[a-zA-Z0-9]+", text.lower())
             if t not in _STOPWORDS and len(t) > 2}
 
