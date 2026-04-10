@@ -28,7 +28,7 @@ Every search follows this flow:
 1. **Local embedding** — the query is converted into a 384-dim vector using `all-MiniLM-L6-v2`, running locally. No API call, no internet needed.
 2. **VectorAI DB similarity search** — the vector is sent via gRPC to VectorAI DB, which runs HNSW cosine similarity across all indexed incidents. Optional filters (severity, service) are applied at this layer.
 3. **Matched historical incidents** — results come back with a structured match explanation: what matched, which field it came from, and what failure category it belongs to.
-4. **Optional triage brief** — when `ANTHROPIC_API_KEY` is set, the top retrieved incidents are summarised into a grounded first-response brief. Core retrieval runs without it.
+4. **Optional triage brief** — generated from retrieved incidents only, using whichever provider you have: Anthropic (cloud) or Ollama (fully offline). Core retrieval runs without either.
 
 VectorAI DB owns vector storage, the HNSW index, cosine search, and payload filtering. The FastAPI backend handles embedding and result enrichment. The Next.js frontend is a thin layer on top.
 
@@ -158,6 +158,23 @@ curl -X POST http://localhost:8000/index/default
 **7. Open the app**
 
 Go to [http://localhost:3000](http://localhost:3000) and try one of the demo queries above.
+
+---
+
+## Fully offline triage (Ollama)
+
+If you want triage briefs without sending data to any cloud API, run Ollama locally and point TraceVault at it.
+
+```bash
+# Pull a model
+ollama pull llama3
+
+# Add to .env
+OLLAMA_URL=http://host.docker.internal:11434
+OLLAMA_MODEL=llama3   # optional, default is llama3
+```
+
+Provider priority: Anthropic takes precedence if both are set. If neither is configured, triage brief is skipped and core retrieval still works normally.
 
 ---
 
@@ -315,6 +332,8 @@ Only `title` is required. The more fields you fill in, the better the retrieval 
 | `VECTORAI_COLLECTION` | Backend | `tracevault_incidents` | Collection name |
 | `VECTORAI_DIM` | Backend | `384` | Embedding dimension |
 | `FRONTEND_URL` | Backend (Railway) | — | Vercel URL — locks CORS in production |
-| `ANTHROPIC_API_KEY` | Backend | — | Enables triage briefs (optional) |
-| `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Model used for triage briefs |
+| `ANTHROPIC_API_KEY` | Backend | — | Enables triage briefs via Claude (optional) |
+| `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Anthropic model for triage briefs |
+| `OLLAMA_URL` | Backend | — | Ollama base URL for offline triage (e.g. `http://localhost:11434`) |
+| `OLLAMA_MODEL` | Backend | `llama3` | Ollama model for triage briefs |
 | `NEXT_PUBLIC_API_URL` | Frontend (Vercel) | — | Railway backend public URL |

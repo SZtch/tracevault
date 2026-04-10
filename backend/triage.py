@@ -1,12 +1,17 @@
 """
-triage.py — Anthropic-powered Triage Brief generator for TraceVault.
+triage.py — Triage Brief generator for TraceVault.
 
 Consumes the list of incidents already retrieved by VectorAI DB and asks
-Anthropic to synthesise a short, structured brief from those incidents only.
+an LLM to synthesise a short, structured brief from those incidents only.
+
+Provider priority:
+  1. Anthropic (ANTHROPIC_API_KEY set) — uses Claude
+  2. Ollama (OLLAMA_URL set) — uses a local model, fully offline
+  3. Neither set — returns None, pure retrieval mode
 
 Design rules (non-negotiable):
 - The LLM receives ONLY the retrieved incidents — no open-ended knowledge.
-- If ANTHROPIC_API_KEY is absent or the call fails, returns None silently so
+- If no provider is configured or the call fails, returns None silently so
   the caller can degrade gracefully without breaking normal search results.
 - No chat, no agents, no tool-calling — a single, deterministic completion.
 """
@@ -23,8 +28,9 @@ log = logging.getLogger("tracevault.triage")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL   = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
-# Hard cap: we only feed the top N retrieved incidents to the brief so the
-# prompt stays concise. The caller already limits search results to top_k.
+OLLAMA_URL        = os.getenv("OLLAMA_URL", "")
+OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "llama3")
+
 MAX_INCIDENTS_FOR_BRIEF = 5
 
 # ── Prompt template ───────────────────────────────────────────────────────────
@@ -108,6 +114,97 @@ def _format_incidents(incidents: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+
+# ── Shared response parser ────────────────────────────────────────────────────
+
+def _parse_brief(raw: str) -> Optional[Dict[str, Any]]:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    try:
+        brief = json.loads(raw)
+    except json.JSONDecodeError as e:
+        log.error("Triage brief JSON parse error: %s", e)
+        return None
+
+    required = {
+        "failure_family", "likely_cause",
+        "first_response_checks", "known_fix_pattern", "confidence_note",
+    }
+    missing = required - brief.keys()
+    if missing:
+        log.warning("Triage brief missing keys: %s", missing)
+        return None
+
+    if not isinstance(brief.get("first_response_checks"), list):
+        log.warning(
+            "Triage brief: first_response_checks is %s, expected list — discarding brief",
+            type(brief.get("first_response_checks")).__name__,
+        )
+        return None
+
+    return brief
+
+
+# ── Anthropic provider ────────────────────────────────────────────────────────
+
+def _generate_via_anthropic(user_message: str) -> Optional[Dict[str, Any]]:
+    try:
+        import anthropic
+    except ImportError:
+        log.warning("anthropic package not installed — skipping Anthropic provider")
+        return None
+
+    try:
+        client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model      = ANTHROPIC_MODEL,
+            max_tokens = 500,
+            system     = _SYSTEM_PROMPT,
+            messages   = [{"role": "user", "content": user_message}],
+        )
+        raw = message.content[0].text
+        log.info("Triage brief generated via Anthropic (model=%s)", ANTHROPIC_MODEL)
+        return _parse_brief(raw)
+    except Exception as e:
+        log.error("Anthropic triage call failed: %s", e)
+        return None
+
+
+# ── Ollama provider ───────────────────────────────────────────────────────────
+
+def _generate_via_ollama(user_message: str) -> Optional[Dict[str, Any]]:
+    try:
+        import httpx
+    except ImportError:
+        log.warning("httpx not installed — skipping Ollama provider")
+        return None
+
+    url = OLLAMA_URL.rstrip("/") + "/api/chat"
+    payload = {
+        "model": OLLAMA_MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": user_message},
+        ],
+    }
+
+    try:
+        resp = httpx.post(url, json=payload, timeout=60)
+        resp.raise_for_status()
+        raw = resp.json()["message"]["content"]
+        log.info("Triage brief generated via Ollama (model=%s)", OLLAMA_MODEL)
+        return _parse_brief(raw)
+    except Exception as e:
+        log.error("Ollama triage call failed: %s", e)
+        return None
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def generate_triage_brief(
@@ -115,82 +212,29 @@ def generate_triage_brief(
     results: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Generate a structured Triage Brief using Anthropic.
+    Generate a structured Triage Brief using the best available provider.
 
-    Parameters
-    ----------
-    query   : The raw user query submitted to TraceVault.
-    results : The incident list returned by VectorAI DB (already ranked).
-
-    Returns
-    -------
-    A dict with keys: failure_family, likely_cause, first_response_checks,
-    known_fix_pattern, confidence_note — or None if the call is skipped/fails.
+    Provider priority:
+      1. Anthropic — if ANTHROPIC_API_KEY is set
+      2. Ollama    — if OLLAMA_URL is set (fully offline)
+      3. None      — pure retrieval mode, no brief
     """
-    if not ANTHROPIC_API_KEY:
-        log.info("ANTHROPIC_API_KEY not set — triage brief skipped")
-        return None
-
     if not results:
         log.info("No retrieved incidents — triage brief skipped")
         return None
 
-    try:
-        import anthropic
-    except ImportError:
-        log.warning("anthropic package not installed — triage brief skipped")
-        return None
-
     incidents_block = _format_incidents(results)
     user_message    = _USER_TEMPLATE.format(
-        query          = query.strip(),
-        count          = min(len(results), MAX_INCIDENTS_FOR_BRIEF),
-        incidents_block= incidents_block,
+        query           = query.strip(),
+        count           = min(len(results), MAX_INCIDENTS_FOR_BRIEF),
+        incidents_block = incidents_block,
     )
 
-    try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        message = client.messages.create(
-            model      = ANTHROPIC_MODEL,
-            max_tokens = 500,
-            system     = _SYSTEM_PROMPT,
-            messages   = [{"role": "user", "content": user_message}],
-        )
-        raw = message.content[0].text.strip()
+    if ANTHROPIC_API_KEY:
+        return _generate_via_anthropic(user_message)
 
-        # Strip accidental markdown fences the model sometimes emits
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
+    if OLLAMA_URL:
+        return _generate_via_ollama(user_message)
 
-        brief = json.loads(raw)
-
-        # Sanity-check required keys exist
-        required = {
-            "failure_family", "likely_cause",
-            "first_response_checks", "known_fix_pattern", "confidence_note",
-        }
-        missing = required - brief.keys()
-        if missing:
-            log.warning("Triage brief missing keys: %s", missing)
-            return None
-
-        # Sanity-check first_response_checks is actually a list
-        if not isinstance(brief.get("first_response_checks"), list):
-            log.warning(
-                "Triage brief: first_response_checks is %s, expected list — discarding brief",
-                type(brief.get("first_response_checks")).__name__,
-            )
-            return None
-
-        log.info("Triage brief generated successfully (model=%s)", ANTHROPIC_MODEL)
-        return brief
-
-    except json.JSONDecodeError as e:
-        log.error("Triage brief JSON parse error: %s", e)
-        return None
-    except Exception as e:
-        log.error("Triage brief generation failed: %s", e)
-        return None
+    log.info("No LLM provider configured — triage brief skipped")
+    return None
