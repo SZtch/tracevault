@@ -46,13 +46,13 @@ export default function TriageBrief({ brief }) {
           style={{ color: 'var(--accent)' }}
         />
         <span
-          className="font-mono text-[10px] font-semibold tracking-widest uppercase"
+          className="font-mono text-[11px] font-semibold tracking-widest uppercase"
           style={{ color: 'var(--accent)' }}
         >
           Triage Brief
         </span>
         <span
-          className="font-mono text-[9px] tracking-wide ml-auto"
+          className="font-mono text-[10px] tracking-wide ml-auto"
           style={{ color: 'var(--text-dim)' }}
         >
           Grounded in retrieved incidents only
@@ -63,13 +63,13 @@ export default function TriageBrief({ brief }) {
       <div className="px-5 py-4 grid gap-4">
 
         {/* Failure family + Likely cause — side by side on wider screens */}
-        <div className="grid sm:grid-cols-2 gap-4">
+        <div className="grid sm:grid-cols-2 gap-5">
           <BriefField
             label="Failure Family"
             value={failure_family}
           />
           <BriefField
-            label="Likely Cause — Inspect First"
+            label="Likely Cause"
             value={likely_cause}
             highlight
           />
@@ -77,25 +77,31 @@ export default function TriageBrief({ brief }) {
 
         {/* First-response checks */}
         {Array.isArray(first_response_checks) && first_response_checks.length > 0 && (
-          <div>
-            <FieldLabel>First-Response Checks</FieldLabel>
-            <ul className="mt-1.5 space-y-1.5">
+          <div
+            className="rounded-lg px-4 py-3"
+            style={{
+              background: 'rgba(90, 112, 128, 0.08)',
+              border:     '1px solid var(--accent-mid)',
+            }}
+          >
+            <FieldLabel>Check First</FieldLabel>
+            <ol className="mt-2 space-y-2">
               {first_response_checks.map((check, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2.5 font-mono text-[11px] leading-relaxed"
-                  style={{ color: 'var(--text)' }}
+                  className="flex items-baseline gap-2.5 font-mono text-[12px] leading-snug"
+                  style={{ color: 'var(--text-bright)' }}
                 >
                   <span
-                    className="flex-shrink-0 mt-px font-semibold"
+                    className="flex-shrink-0 font-bold tabular-nums"
                     style={{ color: 'var(--accent)' }}
                   >
-                    {String(i + 1).padStart(2, '0')}
+                    {i + 1}.
                   </span>
                   {check}
                 </li>
               ))}
-            </ul>
+            </ol>
           </div>
         )}
 
@@ -107,7 +113,7 @@ export default function TriageBrief({ brief }) {
 
         {/* Confidence note */}
         <div
-          className="flex items-start gap-2 px-3.5 py-2.5 rounded-md"
+          className="flex items-start gap-2.5 px-4 py-3 rounded-md"
           style={{
             background:  'rgba(90, 112, 128, 0.10)',
             border:      '1px solid var(--border-bright)',
@@ -120,7 +126,7 @@ export default function TriageBrief({ brief }) {
             Confidence
           </span>
           <span
-            className="font-mono text-[11px] leading-relaxed"
+            className="font-mono text-[12px] leading-relaxed"
             style={{ color: 'var(--text-mid)' }}
           >
             {confidence_note}
@@ -137,7 +143,7 @@ export default function TriageBrief({ brief }) {
 function FieldLabel({ children }) {
   return (
     <span
-      className="font-mono text-[9px] font-semibold tracking-widest uppercase block"
+      className="font-mono text-[10px] font-semibold tracking-widest uppercase block"
       style={{ color: 'var(--text-dim)' }}
     >
       {children}
@@ -151,7 +157,7 @@ function BriefField({ label, value, highlight = false }) {
     <div>
       <FieldLabel>{label}</FieldLabel>
       <p
-        className="font-mono text-[11px] leading-relaxed mt-1"
+        className="font-mono text-[12px] leading-relaxed mt-1.5"
         style={{ color: highlight ? 'var(--text-bright)' : 'var(--text)' }}
       >
         {value}

@@ -30,46 +30,49 @@ MAX_INCIDENTS_FOR_BRIEF = 5
 # ── Prompt template ───────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-You are a triage assistant embedded in an incident-management tool called TraceVault.
-Your only job is to synthesise a short, structured triage brief from a set of
-retrieved historical incidents — nothing else.
+You are a triage assistant inside TraceVault, an incident-management tool.
+Produce a compact, scannable triage brief from retrieved historical incidents only.
 
-Rules you must follow without exception:
-1. Every statement you make must be traceable to the retrieved incidents provided.
-2. Do NOT draw on general engineering knowledge or your training data.
-3. If the retrieved incidents do not contain enough information to populate a
-   section, write exactly: "Insufficient data in retrieved incidents."
-4. Do not speculate, hallucinate, or pad the brief with generic advice.
-5. Output valid JSON only — no markdown fences, no preamble, no commentary.
+Rules — no exceptions:
+1. Every claim must be directly traceable to the retrieved incidents.
+2. Do NOT use general engineering knowledge or training data.
+3. If a section lacks supporting data, write: "Insufficient data in retrieved incidents."
+4. No speculation. No padding. No generic advice.
+5. Output valid JSON only — no markdown fences, no preamble.
+6. Keep every field SHORT. Judges scan this in seconds. Omit anything redundant.
 """
 
 _USER_TEMPLATE = """\
-A new incident has been submitted. VectorAI DB retrieved the following historical
-incidents as the closest semantic matches. Use ONLY these incidents to produce the
-triage brief — do not use any other knowledge.
+New incident query submitted. Use ONLY the retrieved incidents below — no other knowledge.
 
-=== NEW INCIDENT QUERY ===
+=== QUERY ===
 {query}
 
-=== RETRIEVED HISTORICAL INCIDENTS ({count} matches) ===
+=== RETRIEVED INCIDENTS ({count} matches) ===
 {incidents_block}
 
 === OUTPUT FORMAT ===
-Respond with a single JSON object with exactly these keys:
+Return a single JSON object with exactly these five keys:
 
 {{
-  "failure_family": "<1–2 sentences: common failure category seen across the retrieved incidents>",
-  "likely_cause":   "<1–2 sentences: most probable root cause to inspect first, sourced from the retrieved incidents>",
+  "failure_family": "<One tight sentence naming the failure category seen across retrieved incidents.>",
+  "likely_cause":   "<One sentence: most probable root cause based on retrieved incidents.>",
   "first_response_checks": [
-    "<concrete check 1, sourced from the retrieved incidents>",
-    "<concrete check 2>",
-    "<concrete check 3>"
+    "<Action-verb first. ≤12 words. Sourced from retrieved incidents.>",
+    "<Action-verb first. ≤12 words.>",
+    "<Action-verb first. ≤12 words.>"
   ],
-  "known_fix_pattern": "<2–3 sentences: fix pattern documented in the retrieved incidents>",
-  "confidence_note":   "<1 sentence: honest assessment of how closely the retrieved incidents match the new query>"
+  "known_fix_pattern": "<1–2 sentences max. The fix pattern from retrieved incidents. No fluff.>",
+  "confidence_note":   "<One honest sentence. State match quality and any gaps. Do not overclaim.>"
 }}
 
-All string values must be concise and operational. Arrays must contain 3–5 items.
+Strict length rules:
+- failure_family: ≤20 words
+- likely_cause: ≤20 words
+- first_response_checks: 3 items, each ≤12 words, start with an action verb
+- known_fix_pattern: ≤35 words
+- confidence_note: ≤25 words, calibrated — avoid words like "strong" or "high" unless the match is exact
+
 Output JSON only — nothing else.
 """
 
@@ -149,7 +152,7 @@ def generate_triage_brief(
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         message = client.messages.create(
             model      = ANTHROPIC_MODEL,
-            max_tokens = 800,
+            max_tokens = 500,
             system     = _SYSTEM_PROMPT,
             messages   = [{"role": "user", "content": user_message}],
         )
