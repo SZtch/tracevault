@@ -285,6 +285,7 @@ Or use the Index tab in the frontend.
 | `/index/file` | POST | Upload a JSON file of incidents |
 | `/index` | POST | Index incidents from request body |
 | `/search` | POST | Semantic search with match explanation |
+| `/webhooks/pagerduty` | POST | Ingest a PagerDuty incident webhook (V2 and V3 auto-detected) |
 
 ### Search request
 
@@ -321,6 +322,55 @@ Only `title` is required. The more fields you fill in, the better the retrieval 
 ```
 
 `date` accepts `YYYY-MM-DD` or full ISO-8601. `tags` accepts a list of strings or a comma-separated string.
+
+---
+
+## PagerDuty integration
+
+TraceVault can ingest incidents directly from PagerDuty via webhook — no manual copy-paste needed. When an incident triggers, PagerDuty sends a webhook to TraceVault, which normalizes and indexes it automatically. The incident is immediately searchable.
+
+### Setup
+
+1. In PagerDuty: **Integrations → Webhook Subscriptions → New Webhook**
+   - **Webhook URL**: `https://your-backend.up.railway.app/webhooks/pagerduty`
+   - **Scope**: Service level → select your service
+   - **Events**: at minimum `incident.triggered`
+2. Save — PagerDuty shows a signing secret (optional, not required for TraceVault)
+3. Trigger a test incident — check `/health` to confirm `incident_count` increased
+
+### What gets indexed
+
+| PagerDuty field | Mapped to |
+|-----------------|-----------|
+| `title` / `summary` | `title` |
+| `urgency` | `severity` (high → high, critical → critical) |
+| `service.name` | `service` |
+| `created_at` / `created_on` | `date` |
+| `body.details` / `summary` | `error_message` |
+
+`root_cause` and `fix` are set to placeholders at ingest time and can be updated after investigation.
+
+TraceVault auto-detects PagerDuty **V2** and **V3** webhook formats — no configuration needed.
+
+### Local test (curl)
+
+```bash
+curl -X POST http://localhost:8000/webhooks/pagerduty \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": {
+      "event_type": "incident.triggered",
+      "data": {
+        "id": "Q1A2B3C4",
+        "title": "HikariPool connection not available — user-service",
+        "urgency": "high",
+        "service": {"name": "user-service"},
+        "created_at": "2025-04-10T03:22:00Z",
+        "body": {"details": "HikariPool-1 - Connection is not available, request timed out after 30000ms"}
+      }
+    }
+  }'
+```
 
 ---
 
