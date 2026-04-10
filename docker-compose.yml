@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 2m
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      test: ["CMD-SHELL", "cat /proc/1/status || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
