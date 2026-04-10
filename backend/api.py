@@ -28,7 +28,7 @@ try:
 except ImportError:
     pass
 
-from vectordb import index_incidents, search_incidents, get_status, get_collection_meta
+from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count
 from triage import generate_triage_brief
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -312,7 +312,9 @@ def _pydantic_errors_to_list(exc: Exception) -> list:
 @app.get("/health")
 def health():
     """DB connection + collection status. Used by Railway healthcheck and StatusBar."""
-    return get_status()
+    status = get_status()
+    status["incident_count"] = get_incident_count()
+    return status
 
 
 @app.get("/meta")

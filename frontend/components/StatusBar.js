@@ -40,12 +40,12 @@ export default function StatusBar() {
       </div>
 
       {/* Incident count */}
-      {online && status?.points_count != null && (
+      {online && status?.incident_count != null && (
         <div
           className="pl-5 text-[9px] tracking-wide"
           style={{ color: 'var(--text-dim)' }}
         >
-          {status.points_count.toLocaleString()} incident{status.points_count !== 1 ? 's' : ''} indexed
+          {status.incident_count.toLocaleString()} incident{status.incident_count !== 1 ? 's' : ''} indexed
         </div>
       )}
 

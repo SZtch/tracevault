@@ -568,3 +568,27 @@ def get_collection_meta() -> Dict[str, Any]:
             }
     except Exception as e:
         return {"services": [], "severities": [], "error": str(e)}
+
+
+def get_incident_count() -> int:
+    """Count total incidents by scrolling the collection."""
+    try:
+        with get_client() as client:
+            if not client.collections.exists(COLLECTION):
+                return 0
+            total = 0
+            offset = None
+            while True:
+                batch, next_offset = client.points.scroll(
+                    COLLECTION,
+                    limit=100,
+                    offset=offset,
+                    with_payload=False,
+                )
+                total += len(batch)
+                if next_offset is None:
+                    break
+                offset = next_offset
+            return total
+    except Exception:
+        return 0
