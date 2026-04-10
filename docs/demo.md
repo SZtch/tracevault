@@ -1,37 +1,32 @@
 # TraceVault — Retrieval Demo & Evaluation Guide
 
-> For hackathon judges and reviewers who want to verify that the search
-> returns **meaningful** results, not just random noise.
+> If you want to verify the search actually works and isn't just returning random noise, this is the doc.
 
 ---
 
-## Why this matters
+## The problem this solves
 
-The scenario TraceVault targets is specific: an engineer is paged on a live incident and wants to know whether it's happened before. The blockers to finding a prior incident fast are:
+The scenario is specific: you get paged at 2am and the first thing you want to know is *has this happened before?* Three things make that hard:
 
-1. **Vocabulary mismatch** — the same failure gets described differently every time ("pool exhausted" vs "HikariPool timeout" vs "too many connections")
-2. **No similarity ranking** — Confluence and Notion search by keyword; they return everything that contains the word, not the most relevant things
-3. **No fix attached** — even when you find the prior incident, the resolution is in a different doc, a Slack thread, or someone's memory
+1. **Nobody writes incidents the same way** — "pool exhausted", "HikariPool timeout", "too many connections" are all the same failure, but keyword search won't connect them
+2. **Confluence and Notion are keyword search** — they return everything containing the word, not the most relevant things
+3. **The fix is somewhere else** — even when you find the incident, the resolution is in a separate doc, a Slack thread, or someone's head
 
-TraceVault addresses all three: the vector index handles vocabulary mismatch, HNSW ranking handles relevance ordering, and the incident schema keeps root cause and fix co-located with the incident record.
+TraceVault handles all three at once: the vector index deals with vocabulary mismatch, HNSW handles relevance ranking, and the incident schema keeps root cause and fix in the same place as the incident.
 
-The demo below verifies that retrieval is actually working — that the system surfaces the right failure cluster for each query, not random incidents with one token in common.
-
----
-
-## The 45-incident dataset
-
-The sample dataset is clustered around five real failure categories:
-connection pool exhaustion, gRPC deadline cascades, retry storms, Kafka/queue
-backlogs, and OOM/memory pressure. Each demo query below uses the kind of
-phrasing an on-call engineer would actually type at 2 AM — not polished
-textbook terminology — and should surface the right cluster as top results.
+The queries below verify that retrieval is actually doing something useful — not just surfacing incidents that share one token with the query.
 
 ---
 
-## How to run these queries
+## The dataset: 45 incidents, 5 clusters
 
-**UI:** paste the query into the search box, optionally set the severity filter.
+The sample data covers five real failure categories: connection pool exhaustion, gRPC deadline cascades, retry storms, Kafka/queue backlogs, and OOM/memory pressure. Every query below is written the way an on-call engineer would actually type it at 2am — not clean textbook terminology.
+
+---
+
+## How to run
+
+**UI:** paste the query into the search box, set the severity filter if you want.
 
 **curl:**
 ```bash
@@ -40,7 +35,7 @@ curl -s -X POST http://localhost:8000/search \
   -d '{"query": "<paste query here>", "top_k": 5}' | jq '.results[].title'
 ```
 
-First index the sample dataset if you haven't already:
+Index the sample data first if you haven't:
 ```bash
 curl -s -X POST http://localhost:8000/index/default | jq .
 # → {"indexed": 45, "source": "sample_dataset", "status": "ok"}
@@ -48,7 +43,7 @@ curl -s -X POST http://localhost:8000/index/default | jq .
 
 ---
 
-## Demo Query 1 — Connection pool exhaustion
+## Query 1 — Connection pool exhaustion
 
 **Query**
 ```
@@ -65,21 +60,17 @@ hikari pool exhausted during high traffic
 | 4 | INC-017 | DB pool leak after ORM version upgrade | medium |
 | 5 | INC-014 | Postgres max_connections exceeded — all services degraded | critical |
 
-**Why these are correct**
+**Why these come back**
 
-INC-001, INC-013, INC-017, and INC-019 all share the `connection-pool` +
-`hikari` tag combination and contain "connection pool" in their title and error
-message. INC-014 is the platform-level root cause (pgbouncer + max_connections)
-that sits behind many pool exhaustion incidents. The retrieval text for all five
-is boosted with `hikari`, `connection-pool`, and `timeout` tokens — the exact
-terms in the query — so they cluster tightly in embedding space.
+INC-001, INC-013, INC-017, and INC-019 all have the `connection-pool` + `hikari` tag combo and "connection pool" in both the title and error message. INC-014 is the platform-level root cause — pgbouncer hitting max_connections — that sits underneath a lot of pool exhaustion incidents, so it showing up here makes sense.
 
-**What a bad retrieval system would return instead:** generic database incidents
-unrelated to pooling (INC-005 deadlock, INC-015 slow query) or nothing at all.
+Under the hood: retrieval text is built by repeating the most informative fields — title ×4, error message ×3, tags ×3. That makes `hikari`, `connection-pool`, and `timeout` dominate the input going into all-MiniLM-L6-v2, pulling those incident vectors close to the query.
+
+**What bad retrieval looks like:** INC-005 (deadlock) or INC-015 (slow query) showing up — both are database incidents but completely different failure modes.
 
 ---
 
-## Demo Query 2 — gRPC deadline cascade
+## Query 2 — gRPC deadline cascade
 
 **Query**
 ```
@@ -96,21 +87,17 @@ gRPC deadline exceeded, ML service not responding
 | 4 | INC-021 | gRPC deadline exceeded on inventory availability check | high |
 | 5 | INC-029 | Service mesh timeout misconfiguration cutting long-running export requests | medium |
 
-**Why these are correct**
+**Why these come back**
 
-INC-026, INC-009, and INC-040 all carry both `grpc` + `ml` tags and contain
-"deadline exceeded" in their error messages. The embedding for each incident
-repeats the `grpc`, `deadline`, `ml`, and `latency` tokens at high weight.
-INC-021 matches on `grpc` + `deadline` (different domain). INC-029 is a
-legitimate boundary case — service mesh gRPC timeout, not ML, but the
-`grpc` + `timeout` overlap is real and useful for cross-referencing.
+INC-026, INC-009, and INC-040 all have both `grpc` + `ml` tags and "deadline exceeded" in their error messages. Because title and tags dominate the retrieval text, `grpc`, `deadline`, `ml`, and `latency` become the strongest signal — pulling their vectors near the query.
 
-**What a bad retrieval system would return instead:** all timeout incidents
-regardless of protocol (HTTP 504s, Kafka lag, batch timeouts).
+INC-021 comes in on `grpc` + `deadline` even though it's inventory, not ML. INC-029 is a genuine boundary case — service mesh gRPC timeout, not ML-related, but the `grpc` + `timeout` overlap is real and worth cross-referencing.
+
+**What bad retrieval looks like:** every timeout incident mixing in regardless of protocol — HTTP 504s, Kafka lag, batch timeouts all showing up together.
 
 ---
 
-## Demo Query 3 — Retry storm / upstream cascade
+## Query 3 — Upstream cascade / 504s
 
 **Query**
 ```
@@ -127,22 +114,17 @@ checkout keeps getting 504s, payment provider timing out
 | 4 | INC-006 | API rate limit breach causing 429 cascade on payment batch | high |
 | 5 | INC-028 | Exponential retry loop from shipping webhook causing provider block | high |
 
-**Why these are correct**
+**Why these come back**
 
-INC-022 is the canonical match: "checkout", "payment provider", "timeout", and
-"cascade" all appear in its title and error message, and the `upstream-failure` +
-`payment` + `circuit-breaker` tags align perfectly. INC-044 and INC-024 share
-`http-504` + `upstream-failure` + `gateway` — the 504 signal in the query pulls
-them in. INC-006 and INC-028 are correct second-order matches: both describe
-payment/provider failure modes that an engineer investigating checkout 504s
-should also review (rate limits, retry amplification).
+INC-022 is the closest match — "checkout", "payment provider", "timeout", and "cascade" all appear in the title and error message, and the `upstream-failure` + `payment` + `circuit-breaker` tags are very specific. Its vector lands nearest to the query.
 
-**What a bad retrieval system would return instead:** any 5xx or timeout
-incident without distinguishing upstream dependency failures from internal ones.
+INC-044 and INC-024 come in through `http-504` + `upstream-failure` + `gateway`. INC-006 and INC-028 are useful second-order matches — both are payment/provider failure modes worth reviewing when you're investigating checkout 504s, since rate limits and retry amplification tend to appear together.
+
+**What bad retrieval looks like:** any 5xx or timeout incident returning without distinguishing upstream dependency failures from internal ones.
 
 ---
 
-## Demo Query 4 — Kafka / queue backlog
+## Query 4 — Kafka / queue backlog
 
 **Query**
 ```
@@ -159,21 +141,17 @@ kafka consumer lag growing, batch jobs falling behind schedule
 | 4 | INC-032 | Celery worker stuck on poison message — task queue fully backed up | high |
 | 5 | INC-035 | Worker process hung on external geocoding API — batch import stalled | high |
 
-**Why these are correct**
+**Why these come back**
 
-INC-036 is a near-literal match: its title echoes "consumer lag growing" and
-"batch processor stuck." INC-011 and INC-030 share `kafka` + `consumer-lag` +
-`queue` and are the closest siblings in embedding space. INC-032 and INC-035
-match on `queue-backlog` + `worker-stuck` + `batch-processing` — different
-broker (Celery/SQS) but the same failure mode, which is exactly the kind of
-cross-system pattern retrieval should surface.
+INC-036 is almost a literal match — the title echoes "consumer lag growing" and "batch processor stuck", and `kafka` + `consumer-lag` + `batch-processing` dominate the retrieval text. INC-011 and INC-030 are the nearest siblings in embedding space, both carrying strong Kafka + consumer lag signal.
 
-**What a bad retrieval system would return instead:** all "slow" or "delayed"
-incidents, including unrelated DB slowdowns and HTTP timeouts.
+INC-032 and INC-035 are interesting because they're a different broker (Celery/SQS, not Kafka), but the failure mode is identical: queue backlog + worker stuck + batch processing. That's exactly the kind of cross-stack pattern the system should be surfacing — not just exact technology name matches.
+
+**What bad retrieval looks like:** every "slow" or "delayed" incident returning, including unrelated DB slowdowns and HTTP timeouts.
 
 ---
 
-## Demo Query 5 — OOM / memory pressure
+## Query 5 — OOM / memory pressure
 
 **Query**
 ```
@@ -190,38 +168,31 @@ analytics worker OOMKilled, pod keeps restarting
 | 4 | INC-043 | Memory leak in PDF rendering worker causing weekly OOMKill | high |
 | 5 | INC-039 | Worker queue backed up — email sends delayed 3 hours | high |
 
-**Why these are correct**
+**Why these come back**
 
-INC-004 is a direct hit: `kubernetes`, `oom`, `analytics`, `worker` all match.
-INC-034 is the batch analytics sibling — same service cluster, same OOM symptom
-without the Kubernetes wrapper. INC-037 matches on `memory-pressure` + `oom` +
-`heap`; the root cause (unbounded store) is a plausible prior incident to check
-when pods restart repeatedly. INC-043 matches via `memory-leak` + `oom` +
-`worker` — a leak-driven OOMKill looks identical to a load-driven one from the
-outside. INC-039 is the boundary case: `memory-pressure` tag matches but the
-primary symptom is queue backlog — useful for judges to probe whether the system
-can be confused by tag overlap.
+INC-004 is a direct hit — `kubernetes`, `oom`, `analytics`, `worker` are all in the title and tags, dominating the retrieval text going into all-MiniLM-L6-v2. INC-034 is the batch analytics sibling — same OOM symptom, no Kubernetes wrapper.
 
-**What a bad retrieval system would return:** any pod restart or service
-disruption incident regardless of the memory root cause.
+INC-037 comes in through `memory-pressure` + `oom` + `heap`. The root cause is different (unbounded session store), but from the outside a pod restarting repeatedly looks identical regardless of why. INC-043 matches via `memory-leak` + `oom` + `worker` — a leak-driven OOMKill and a load-driven one are indistinguishable from the outside.
+
+INC-039 is the most interesting boundary case to probe: `memory-pressure` tag matches but the primary symptom is queue backlog. If you want to test how far the system can be confused by tag overlap, start here.
+
+**What bad retrieval looks like:** every pod restart or service disruption returning regardless of whether memory is actually the root cause.
 
 ---
 
-## What these results demonstrate
+## What these results show
 
-| Property | Evidence |
-|----------|----------|
-| **Intra-cluster precision** | Top 3 results for every query come from the same failure category, not random incidents |
-| **Cross-cluster boundary sharpness** | A "gRPC deadline" query does not return Kafka or OOM incidents in the top 5 |
-| **Realistic query tolerance** | Queries use casual engineer phrasing ("keeps getting 504s", "falling behind schedule") — not field names or tags — and still retrieve the right cluster |
-| **Legitimate boundary cases** | Rank 4–5 results are explainable overlaps (shared tags, sibling failure modes), not noise |
-| **Severity-filter composability** | Adding `"severity": "critical"` to any query narrows to the most urgent incidents in that cluster without breaking precision |
+| | |
+|--|--|
+| **Cluster precision** | Top 3 for every query comes from the same failure category, not random incidents |
+| **Clean cluster boundaries** | A gRPC deadline query doesn't pull in Kafka or OOM incidents |
+| **Casual query tolerance** | Queries are written how engineers actually type at 2am — no field names, no tags — and still hit the right cluster |
+| **Explainable boundary cases** | Rank 4–5 are always traceable overlaps (shared tags, sibling failure modes), not noise |
+| **Severity filter doesn't break precision** | Adding `"severity": "critical"` narrows results without scrambling the ranking |
 
 ---
 
-## Severity filter smoke test
-
-Run the connection pool query with a severity filter to verify the filter layer works end to end:
+## Smoke test: severity filter
 
 ```bash
 curl -s -X POST http://localhost:8000/search \
@@ -230,8 +201,7 @@ curl -s -X POST http://localhost:8000/search \
   | jq '.results[] | {id: .incident_id, severity: .severity, title: .title}'
 ```
 
-Expected: only INC-001, INC-013, INC-019, INC-014 — all `critical`. INC-017
-(medium) and INC-041 (medium) should be absent.
+Expected: only INC-001, INC-013, INC-019, INC-014. INC-017 and INC-041 are both `medium` — they should be gone.
 
 ---
 
@@ -241,8 +211,4 @@ Expected: only INC-001, INC-013, INC-019, INC-014 — all `critical`. INC-017
 DNS resolution failure in service mesh
 ```
 
-Expected: low similarity scores (< 0.25) across all results. No incident in the
-dataset is about DNS. The system should return its closest matches (likely
-INC-029 service mesh timeout, INC-007 SSL/auth) with honest low scores rather
-than hallucinating a confident wrong answer. Check `results[].score` in the
-response.
+There are no DNS incidents in the dataset. Expected: low similarity scores (< 0.25) across the board. The system should return its nearest matches (likely INC-029 service mesh timeout, INC-007 SSL/auth) with honest low scores — not a confident wrong answer. Check `results[].score` in the response.
