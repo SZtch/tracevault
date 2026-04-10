@@ -166,18 +166,18 @@ def build_searchable_text(incident: Dict[str, Any], exception_class: str = "") -
       root_cause (full)— narrative prose adds generic words (increased, deployed,
                         added, caused) that overlap across unrelated incidents.
     """
-    title         = incident.get("title", "").strip()
-    error_message = incident.get("error_message", "").strip()
-    service       = incident.get("service", "").strip()
+    title         = (incident.get("title")         or "").strip()
+    error_message = (incident.get("error_message") or "").strip()
+    service       = (incident.get("service")       or "").strip()
     service_norm  = service.replace("-", " ")  # "payment-service" → "payment service"
-    tags          = " ".join(incident.get("tags", []))
+    tags          = " ".join(incident.get("tags") or [])
 
     # First sentence of root_cause — problem context without full narrative
-    raw_cause      = incident.get("root_cause", "").strip()
+    raw_cause      = (incident.get("root_cause") or "").strip()
     first_sentence = re.split(r'(?<=[.!?])\s', raw_cause)[0] if raw_cause else ""
 
     # Stack trace: exception line + top 2 frames only
-    raw_trace  = incident.get("stack_trace", "")
+    raw_trace  = incident.get("stack_trace") or ""
     stack_head = "\n".join(raw_trace.splitlines()[:3]) if raw_trace else ""
 
     parts = [

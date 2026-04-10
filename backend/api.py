@@ -477,54 +477,91 @@ _PD_URGENCY_MAP: Dict[str, str] = {
 
 class PagerDutyWebhook(BaseModel):
     """
-    Simplified PagerDuty V3 webhook envelope.
-    Only the fields TraceVault needs for ingest are extracted.
+    Auto-detects PagerDuty V2 and V3 webhook formats.
+    - V3: {"event": {"event_type": "...", "data": {...}}}
+    - V2: {"messages": [{"type": "...", "data": {"incident": {...}}}]}
     Extra fields are ignored.
     """
     class Config:
         extra = "allow"
 
-    event: Dict[str, Any]
+    # V3 field
+    event: Optional[Dict[str, Any]] = None
+    # V2 field
+    messages: Optional[List[Dict[str, Any]]] = None
+
+
+def _extract_pd_data(payload: PagerDutyWebhook) -> tuple[Dict[str, Any], str]:
+    """
+    Auto-detect V2 vs V3 and return (data_dict, event_type).
+    V3: payload.event.data
+    V2: payload.messages[0].data.incident
+    """
+    # ── V3 format ────────────────────────────────────────────────────────
+    if payload.event:
+        data       = payload.event.get("data", {})
+        event_type = payload.event.get("event_type", "")
+        log.info("PagerDuty webhook detected: V3 format (event_type=%s)", event_type)
+        return data, event_type
+
+    # ── V2 format ────────────────────────────────────────────────────────
+    if payload.messages:
+        msg        = payload.messages[0] if payload.messages else {}
+        event_type = msg.get("type", "")
+        # V2 nests incident under data.incident
+        raw_data   = msg.get("data", {})
+        data       = raw_data.get("incident", raw_data)
+        log.info("PagerDuty webhook detected: V2 format (type=%s)", event_type)
+        return data, event_type
+
+    log.warning("PagerDuty webhook: unrecognized format — no 'event' or 'messages' key")
+    return {}, ""
 
 
 def _normalize_pd(payload: PagerDutyWebhook) -> Dict[str, Any]:
     """
-    Map PagerDuty webhook fields to TraceVault's internal incident schema.
+    Map PagerDuty V2/V3 webhook fields to TraceVault's internal incident schema.
     Safe placeholders are used for fields unavailable at ingest time.
     """
-    data = payload.event.get("data", {})
+    data, event_type = _extract_pd_data(payload)
+
+    def _s(val) -> str:
+        """Safely convert any value to stripped string."""
+        return str(val).strip() if val is not None else ""
 
     # ID — PagerDuty incident ID or fallback
-    incident_id = str(data.get("id", "")).strip() or None
+    incident_id = _s(data.get("id")) or None
 
     # Title — required; fall back to event type if missing
     title = (
-        str(data.get("title", "")).strip()
-        or payload.event.get("event_type", "Untitled PagerDuty incident")
+        _s(data.get("title"))
+        or _s(data.get("summary"))
+        or _s(event_type)
+        or "Untitled PagerDuty incident"
     )
 
-    # Service name
-    svc_block = data.get("service", {})
+    # Service name — V3: data.service.name / V2: data.service.name or data.service.summary
+    svc_block = data.get("service") or {}
     service = (
-        str(svc_block.get("name", "")).strip()
-        if isinstance(svc_block, dict) else None
+        _s(svc_block.get("name") or svc_block.get("summary"))
+        if isinstance(svc_block, dict) else ""
     ) or None
 
     # Severity — map PagerDuty urgency to TraceVault severity
-    urgency  = str(data.get("urgency", "")).lower().strip()
+    urgency  = _s(data.get("urgency")).lower()
     severity = _PD_URGENCY_MAP.get(urgency, "medium")
 
-    # Date — normalize ISO-8601 datetime to YYYY-MM-DD
-    raw_date = str(data.get("created_at", "")).strip()
+    # Date — V3: data.created_at / V2: data.created_on
+    raw_date = _s(data.get("created_at") or data.get("created_on"))
     date: Optional[str] = None
     if raw_date:
         dt_match = _ISO_DATETIME_RE.match(raw_date)
         date = dt_match.group(1) if dt_match else (raw_date[:10] if len(raw_date) >= 10 else None)
 
-    # Error message — from body.details or summary
-    body        = data.get("body", {})
-    err_details = str(body.get("details", "")).strip() if isinstance(body, dict) else ""
-    summary     = str(data.get("summary", "")).strip()
+    # Error message — V3: body.details / V2: body.details or summary
+    body        = data.get("body") or {}
+    err_details = _s(body.get("details")) if isinstance(body, dict) else ""
+    summary     = _s(data.get("summary"))
     error_message = (err_details or summary or None)
     if error_message:
         error_message = error_message[:2000]
@@ -546,27 +583,26 @@ def _normalize_pd(payload: PagerDutyWebhook) -> Dict[str, Any]:
 def webhook_pagerduty(payload: PagerDutyWebhook):
     """
     Ingest a PagerDuty webhook and index it into VectorAI DB.
+    Auto-detects V2 and V3 webhook formats.
 
-    The incident is immediately searchable after this call returns.
-    Existing manual indexing flows (/index, /index/file, /index/default) are unchanged.
-
-    Local demo:
+    V3 (manual/curl demo):
       curl -X POST http://localhost:8000/webhooks/pagerduty \\
         -H "Content-Type: application/json" \\
-        -d '{
-          "event": {
-            "event_type": "incident.triggered",
-            "data": {
-              "id": "Q1A2B3C4",
-              "title": "HikariPool connection not available — user-service",
-              "urgency": "high",
-              "service": {"name": "user-service"},
-              "created_at": "2025-04-10T03:22:00Z",
-              "body": {"details": "HikariPool-1 - Connection is not available, request timed out after 30000ms"}
-            }
-          }
-        }'
+        -d '{"event": {"event_type": "incident.triggered", "data": {"id": "Q1A2B3C4",
+             "title": "HikariPool timeout", "urgency": "high",
+             "service": {"name": "user-service"},
+             "created_at": "2025-04-10T03:22:00Z",
+             "body": {"details": "Connection timed out after 30000ms"}}}}'
+
+    V2 (PagerDuty webhook subscription):
+      Payload auto-detected from messages[0].data.incident structure.
     """
+    if payload.event is None and payload.messages is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Unrecognized PagerDuty webhook format — expected 'event' (V3) or 'messages' (V2)",
+        )
+
     try:
         normalized = _normalize_pd(payload)
     except Exception as e:
