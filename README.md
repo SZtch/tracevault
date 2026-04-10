@@ -2,10 +2,10 @@
 
 **Paste an error or stack trace. Find the last time something broke like this — and what fixed it.**
 
-TraceVault is an incident similarity search tool built on Actian VectorAI DB. Index your incident history, paste a raw error or alert text, and get the closest past incidents back — ranked by similarity, with root causes and fixes included.
+TraceVault indexes incident history as vectors and retrieves the closest past incidents from a new error, including root causes and proven fixes, using local embeddings and Actian VectorAI DB.
 
 > Built for the **Actian VectorAI DB Build Challenge**  
-> Local-first retrieval · Offline-capable core search · Deployable on Vercel + Railway · ARM-compatible
+> Local embeddings · No cloud dependency for search · Deployable on Vercel + Railway · ARM-compatible
 
 ---
 
@@ -23,15 +23,14 @@ TraceVault uses vector search to fix this. Paste whatever you have — the raw e
 
 ## How it works
 
-Every search follows four steps:
+Every search follows this flow:
 
-1. **Embed** — your query is converted locally into a 384-dim vector using `all-MiniLM-L6-v2`. No API call, no internet needed.
-2. **Search** — the vector is sent via gRPC to VectorAI DB, which runs HNSW cosine similarity across all indexed incidents. Optional filters (severity, service) are applied at this layer.
-3. **Explain** — results come back with a structured match explanation: what matched, which field it came from, and what failure category it belongs to.
+1. **Local embedding** — the query is converted into a 384-dim vector using `all-MiniLM-L6-v2`, running locally. No API call, no internet needed.
+2. **VectorAI DB similarity search** — the vector is sent via gRPC to VectorAI DB, which runs HNSW cosine similarity across all indexed incidents. Optional filters (severity, service) are applied at this layer.
+3. **Matched historical incidents** — results come back with a structured match explanation: what matched, which field it came from, and what failure category it belongs to.
+4. **Optional triage brief** — when `ANTHROPIC_API_KEY` is set, the top retrieved incidents are summarised into a grounded first-response brief. Core retrieval runs without it.
 
-4. **Triage brief** — when Anthropic is configured, the top retrieved incidents are summarised into a grounded first-response brief. Retrieval runs without it.
-
-VectorAI DB handles vector storage, the HNSW index, cosine search, and payload filtering. The FastAPI backend handles embedding and result enrichment. The Next.js frontend is a thin client on top.
+VectorAI DB owns vector storage, the HNSW index, cosine search, and payload filtering. The FastAPI backend handles embedding and result enrichment. The Next.js frontend is a thin layer on top.
 
 ---
 
@@ -52,11 +51,11 @@ VectorAI DB handles vector storage, the HNSW index, cosine search, and payload f
 | Layer | Technology |
 |-------|------------|
 | Vector DB | **Actian VectorAI DB** — gRPC, HNSW, cosine similarity |
-| Embedding | `all-MiniLM-L6-v2` via sentence-transformers, 384-dim, offline |
-| Triage brief | Anthropic Claude — optional grounded first-response brief from retrieved incidents |
+| Embedding | `all-MiniLM-L6-v2` via sentence-transformers, 384-dim, local |
+| Triage brief | Anthropic Claude — optional, grounded on retrieved incidents only |
 | Backend | FastAPI + Python 3.11, Pydantic v2 |
 | Frontend | Next.js 14 |
-| Offline | ✅ Core retrieval offline after first model download |
+| Offline | ✅ Search runs with no cloud dependency once the embedding model is cached |
 | Cloud | ✅ Vercel (frontend) + Railway (backend + DB) |
 | ARM | ✅ VectorAI DB image includes ARM64 |
 
@@ -85,16 +84,13 @@ These use real engineer phrasing, not polished textbook terms. See [`docs/demo.m
 git clone https://github.com/SZtch/tracevault && cd tracevault
 cp .env.example .env          # defaults work for local dev; set ANTHROPIC_API_KEY for triage briefs
 
-# 2. Place the SDK wheel (required — from the hackathon kit)
-cp /path/to/actian_vectorai-0.1.0b2-py3-none-any.whl backend/
-
-# 3. Start backend + VectorAI DB
+# 2. Start backend + VectorAI DB
 docker compose up --build -d
 
-# 4. Start the frontend
+# 3. Start the frontend
 cd frontend && npm install && npm run dev   # add NEXT_PUBLIC_API_URL=http://localhost:8000 to frontend/.env.local
 
-# 5. Seed data
+# 4. Seed data
 curl -X POST http://localhost:8000/index/default
 ```
 
@@ -108,7 +104,6 @@ Open [http://localhost:3000](http://localhost:3000) and try a demo query. Full s
 
 - Docker + Docker Compose
 - Node.js 18+
-- `actian_vectorai-0.1.0b2-py3-none-any.whl` from the hackathon kit
 
 ### Steps
 
@@ -118,37 +113,32 @@ git clone https://github.com/SZtch/tracevault
 cd tracevault
 cp .env.example .env
 ```
-The defaults in `.env.example` work as-is for local dev. If you want triage briefs, set `ANTHROPIC_API_KEY` in `.env`.
+The defaults in `.env.example` work as-is for local dev. Set `ANTHROPIC_API_KEY` in `.env` if you want triage briefs.
 
-**2. Place the SDK wheel in `backend/`**
-```bash
-cp /path/to/actian_vectorai-0.1.0b2-py3-none-any.whl backend/
-```
+**2. (Optional) Pre-download the embedding model**
 
-**3. (Optional) Pre-download the embedding model**
-
-The first `docker compose up --build` will download `all-MiniLM-L6-v2` (~90MB) automatically. If you want to run fully offline afterwards, pre-download the model while you still have internet:
+The first `docker compose up --build` downloads `all-MiniLM-L6-v2` (~90MB) automatically. If you want search to work with no internet afterwards, cache it now while you still have a connection:
 
 ```bash
 pip install sentence-transformers
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ```
 
-After this the model is cached locally. You can cut the internet and everything still works.
+After this the model is cached locally and search runs with no internet required.
 
-**4. Start the backend + VectorAI DB**
+**3. Start the backend + VectorAI DB**
 ```bash
 docker compose up --build -d
 ```
 This starts two containers: VectorAI DB on port 50051 and the FastAPI backend on port 8000.
 
-**5. Check the backend is up**
+**4. Check the backend is up**
 ```bash
 curl http://localhost:8000/health
 # → {"connected": true, "collection_exists": false, ...}
 ```
 
-**6. Start the frontend**
+**5. Start the frontend**
 ```bash
 cd frontend
 npm install
@@ -159,13 +149,13 @@ Create `frontend/.env.local` with:
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-**7. Index the sample dataset**
+**6. Index the sample dataset**
 ```bash
 curl -X POST http://localhost:8000/index/default
 # → {"indexed": 45, "source": "sample_dataset", "status": "ok"}
 ```
 
-**8. Open the app**
+**7. Open the app**
 
 Go to [http://localhost:3000](http://localhost:3000) and try one of the demo queries above.
 
@@ -183,7 +173,7 @@ Railway Project: tracevault
     └── VECTORAI_DB_ADDR: vectoraidb.railway.internal:50051
 ```
 
-VectorAI DB is kept internal because Railway's public proxy is HTTP-only and the DB speaks gRPC. All DB access goes through the backend.
+VectorAI DB stays internal — Railway's public proxy is HTTP-only, but the DB speaks gRPC. Everything goes through the backend.
 
 ---
 
@@ -212,16 +202,10 @@ VectorAI DB is kept internal because Railway's public proxy is HTTP-only and the
 | `VECTORAI_COLLECTION` | `tracevault_incidents` |
 | `VECTORAI_DIM` | `384` |
 | `FRONTEND_URL` | `https://your-app.vercel.app` ← fill in after Vercel deploy |
-| `ANTHROPIC_API_KEY` | your key (optional) |
+| `ANTHROPIC_API_KEY` | your key (optional — enables triage briefs) |
 
-3. If the `.whl` isn't committed to the repo, add this build argument:
-
-| Build Arg | Value |
-|-----------|-------|
-| `VECTORAI_WHL_URL` | `https://your-host/actian_vectorai-0.1.0b2-py3-none-any.whl` |
-
-4. Enable a public domain and copy the URL
-5. Wait for `/health` to return green
+3. Enable a public domain and copy the URL
+4. Wait for `/health` to return green
 
 ---
 
@@ -264,7 +248,6 @@ Or use the Index tab in the frontend.
 
 ## Deployment checklist
 
-- [ ] `actian_vectorai-0.1.0b2-py3-none-any.whl` in `backend/` OR `VECTORAI_WHL_URL` build arg set
 - [ ] Railway: `vectoraidb` running with `/data` volume mounted
 - [ ] Railway: `backend` passing healthcheck at `/health`
 - [ ] Railway: `VECTORAI_DB_ADDR=vectoraidb.railway.internal:50051`
@@ -335,4 +318,3 @@ Only `title` is required. The more fields you fill in, the better the retrieval 
 | `ANTHROPIC_API_KEY` | Backend | — | Enables triage briefs (optional) |
 | `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Model used for triage briefs |
 | `NEXT_PUBLIC_API_URL` | Frontend (Vercel) | — | Railway backend public URL |
-| `VECTORAI_WHL_URL` | Backend build arg | — | SDK `.whl` URL if not committed to repo |
