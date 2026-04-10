@@ -50,6 +50,7 @@ services:
       VECTORAI_DIM: "${VECTORAI_DIM:-384}"
       # Leave FRONTEND_URL unset locally → CORS stays open for dev
       FRONTEND_URL: "${FRONTEND_URL:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     depends_on:
       vectoraidb:
         condition: service_started
