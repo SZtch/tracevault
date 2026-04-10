@@ -1,26 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { SearchIcon, SparkleIcon } from '@/components/Icons'
+import { SearchIcon } from '@/components/Icons'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
-// The 3 strongest demo queries — each targets a distinct failure cluster.
-// Phrased as an engineer would type them at 2am, not as field values.
-const DEMO_QUERIES = [
-  {
-    label: 'Connection pool',
-    query: 'HikariPool connection not available, requests timing out under load',
-  },
-  {
-    label: 'Kafka consumer lag',
-    query: 'Kafka consumer group lag growing, batch processor stuck behind',
-  },
-  {
-    label: 'gRPC / ML inference',
-    query: 'gRPC deadline exceeded on ML inference service, requests failing',
-  },
-]
 
 export default function SearchPanel({ query, setQuery, setResults, setLoading, loading, setTriageBrief }) {
   const [severity,    setSeverity]    = useState('')
@@ -83,11 +66,6 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
     }
   }
 
-  function handleDemo(dq) {
-    setQuery(dq.query)
-    runSearch(dq.query)
-  }
-
   return (
     <div
       className="flex-shrink-0 px-6 pt-5 pb-4 sm:px-8 border-b"
@@ -110,40 +88,6 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
         >
           Enter ↵ to search
         </span>
-      </div>
-
-      {/* ── Demo chips ── */}
-      <div className="flex items-center gap-1.5 flex-wrap mb-3">
-        <div className="flex items-center gap-1 mr-0.5">
-          <SparkleIcon className="w-2.5 h-2.5" style={{ color: 'var(--text-dim)' }} />
-          <span
-            className="font-mono text-[9px] tracking-widest uppercase"
-            style={{ color: 'var(--text-dim)' }}
-          >
-            Try
-          </span>
-        </div>
-        {DEMO_QUERIES.map(dq => (
-          <button
-            key={dq.label}
-            onClick={() => handleDemo(dq)}
-            disabled={loading}
-            className="font-mono text-[10px] px-2.5 py-1 rounded border transition-all duration-100 disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              color:       'var(--accent)',
-              background:  'var(--accent-dim)',
-              borderColor: 'var(--accent-mid)',
-            }}
-            onMouseEnter={e => {
-              e.currentTarget.style.background = 'var(--accent-mid)'
-            }}
-            onMouseLeave={e => {
-              e.currentTarget.style.background = 'var(--accent-dim)'
-            }}
-          >
-            {dq.label} →
-          </button>
-        ))}
       </div>
 
       {/* ── Input + button ── */}

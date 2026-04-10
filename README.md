@@ -5,7 +5,7 @@
 TraceVault indexes incident history as vectors and retrieves the closest past incidents from a new error, including root causes and proven fixes, using local embeddings and Actian VectorAI DB.
 
 > Built for the **Actian VectorAI DB Build Challenge**  
-> Local embeddings · No cloud dependency for search · Deployable on Vercel + Railway · ARM-compatible
+> Local embeddings · Search runs independently of any cloud API · Deployable on Vercel + Railway · ARM-compatible
 
 ---
 
@@ -25,7 +25,7 @@ TraceVault uses vector search to fix this. Paste whatever you have — the raw e
 
 Every search follows this flow:
 
-1. **Local embedding** — the query is converted into a 384-dim vector using `all-MiniLM-L6-v2`, running locally. No API call, no internet needed.
+1. **Local embedding** — the query is converted into a 384-dim vector using `all-MiniLM-L6-v2`, running locally. No API call required — runs locally once the embedding model is cached.
 2. **VectorAI DB similarity search** — the vector is sent via gRPC to VectorAI DB, which runs HNSW cosine similarity across all indexed incidents. Optional filters (severity, service) are applied at this layer.
 3. **Matched historical incidents** — results come back with a structured match explanation: what matched, which field it came from, and what failure category it belongs to.
 4. **Optional triage brief** — generated from retrieved incidents only, using whichever provider you have: Anthropic (cloud) or Ollama (fully offline). Core retrieval runs without either.
@@ -55,7 +55,7 @@ VectorAI DB owns vector storage, the HNSW index, cosine search, and payload filt
 | Triage brief | Anthropic Claude — optional, grounded on retrieved incidents only |
 | Backend | FastAPI + Python 3.11, Pydantic v2 |
 | Frontend | Next.js 14 |
-| Offline | ✅ Search runs with no cloud dependency once the embedding model is cached |
+| Offline | ✅ Embedding runs locally once the model is cached (~90MB, downloaded on first run) |
 | Cloud | ✅ Vercel (frontend) + Railway (backend + DB) |
 | ARM | ✅ VectorAI DB image includes ARM64 |
 
@@ -124,7 +124,7 @@ pip install sentence-transformers
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 ```
 
-After this the model is cached locally and search runs with no internet required.
+After this the model is cached locally. Search runs independently of any cloud API.
 
 **3. Start the backend + VectorAI DB**
 ```bash
