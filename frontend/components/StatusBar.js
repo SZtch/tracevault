@@ -52,7 +52,6 @@ export default function StatusBar() {
       {/* No data hint */}
       {online && !status?.collection_exists && (
         <div className="pl-5 text-[9px]" style={{ color: 'var(--text-dim)' }}>
-          No data — use Index tab
         </div>
       )}
 

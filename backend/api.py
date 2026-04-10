@@ -437,3 +437,157 @@ def search(req: SearchRequest):
         }
     except Exception as e:
         raise _db_error(e)
+
+
+# ── Webhook: PagerDuty ingest ─────────────────────────────────────────────────
+#
+# Accepts a simplified PagerDuty-style webhook payload and indexes it directly
+# into VectorAI DB. No signature validation, no lifecycle sync, no deduplication.
+# Designed for demo use and real ingest when PagerDuty webhooks are configured.
+#
+# PagerDuty webhook setup:
+#   Service → Integrations → Add webhook → URL: https://your-backend/webhooks/pagerduty
+#
+# Local demo (offline):
+#   curl -X POST http://localhost:8000/webhooks/pagerduty \
+#     -H "Content-Type: application/json" \
+#     -d '{
+#       "event": {
+#         "event_type": "incident.triggered",
+#         "data": {
+#           "id": "Q1A2B3C4",
+#           "title": "HikariPool connection not available — user-service",
+#           "urgency": "high",
+#           "service": {"name": "user-service"},
+#           "created_at": "2025-04-10T03:22:00Z",
+#           "body": {"details": "HikariPool-1 - Connection is not available, request timed out after 30000ms"}
+#         }
+#       }
+#     }'
+
+_PD_URGENCY_MAP: Dict[str, str] = {
+    "critical": "critical",
+    "high":     "high",
+    "low":      "low",
+    "medium":   "medium",
+}
+
+
+class PagerDutyWebhook(BaseModel):
+    """
+    Simplified PagerDuty V3 webhook envelope.
+    Only the fields TraceVault needs for ingest are extracted.
+    Extra fields are ignored.
+    """
+    class Config:
+        extra = "allow"
+
+    event: Dict[str, Any]
+
+
+def _normalize_pd(payload: PagerDutyWebhook) -> Dict[str, Any]:
+    """
+    Map PagerDuty webhook fields to TraceVault's internal incident schema.
+    Safe placeholders are used for fields unavailable at ingest time.
+    """
+    data = payload.event.get("data", {})
+
+    # ID — PagerDuty incident ID or fallback
+    incident_id = str(data.get("id", "")).strip() or None
+
+    # Title — required; fall back to event type if missing
+    title = (
+        str(data.get("title", "")).strip()
+        or payload.event.get("event_type", "Untitled PagerDuty incident")
+    )
+
+    # Service name
+    svc_block = data.get("service", {})
+    service = (
+        str(svc_block.get("name", "")).strip()
+        if isinstance(svc_block, dict) else None
+    ) or None
+
+    # Severity — map PagerDuty urgency to TraceVault severity
+    urgency  = str(data.get("urgency", "")).lower().strip()
+    severity = _PD_URGENCY_MAP.get(urgency, "medium")
+
+    # Date — normalize ISO-8601 datetime to YYYY-MM-DD
+    raw_date = str(data.get("created_at", "")).strip()
+    date: Optional[str] = None
+    if raw_date:
+        dt_match = _ISO_DATETIME_RE.match(raw_date)
+        date = dt_match.group(1) if dt_match else (raw_date[:10] if len(raw_date) >= 10 else None)
+
+    # Error message — from body.details or summary
+    body        = data.get("body", {})
+    err_details = str(body.get("details", "")).strip() if isinstance(body, dict) else ""
+    summary     = str(data.get("summary", "")).strip()
+    error_message = (err_details or summary or None)
+    if error_message:
+        error_message = error_message[:2000]
+
+    return {
+        "id":            incident_id,
+        "title":         title[:300],
+        "service":       service,
+        "severity":      severity,
+        "date":          date,
+        "error_message": error_message,
+        "root_cause":    "Unknown at ingest time — update after investigation.",
+        "fix":           "Pending investigation.",
+        "tags":          ["pagerduty", "webhook"],
+    }
+
+
+@app.post("/webhooks/pagerduty")
+def webhook_pagerduty(payload: PagerDutyWebhook):
+    """
+    Ingest a PagerDuty webhook and index it into VectorAI DB.
+
+    The incident is immediately searchable after this call returns.
+    Existing manual indexing flows (/index, /index/file, /index/default) are unchanged.
+
+    Local demo:
+      curl -X POST http://localhost:8000/webhooks/pagerduty \\
+        -H "Content-Type: application/json" \\
+        -d '{
+          "event": {
+            "event_type": "incident.triggered",
+            "data": {
+              "id": "Q1A2B3C4",
+              "title": "HikariPool connection not available — user-service",
+              "urgency": "high",
+              "service": {"name": "user-service"},
+              "created_at": "2025-04-10T03:22:00Z",
+              "body": {"details": "HikariPool-1 - Connection is not available, request timed out after 30000ms"}
+            }
+          }
+        }'
+    """
+    try:
+        normalized = _normalize_pd(payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Payload normalization failed: {e}")
+
+    try:
+        incident = IncidentInput(**normalized)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Normalized payload failed schema validation",
+                "errors":  _pydantic_errors_to_list(exc),
+            },
+        )
+
+    try:
+        count = index_incidents([incident.to_dict()])
+        return {
+            "status":      "ok",
+            "indexed":     count,
+            "incident_id": normalized.get("id") or "(generated)",
+            "source":      "pagerduty_webhook",
+        }
+    except Exception as e:
+        raise _db_error(e)

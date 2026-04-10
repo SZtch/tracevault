@@ -212,3 +212,53 @@ DNS resolution failure in service mesh
 ```
 
 There are no DNS incidents in the dataset. Expected: low similarity scores (< 0.25) across the board. The system should return its nearest matches (likely INC-029 service mesh timeout, INC-007 SSL/auth) with honest low scores — not a confident wrong answer. Check `results[].score` in the response.
+
+---
+
+## Webhook ingest — PagerDuty
+
+TraceVault exposes a webhook endpoint that accepts PagerDuty-style payloads and indexes them directly into VectorAI DB. The incident is immediately searchable after the call returns.
+
+### Local demo (offline)
+
+```bash
+curl -X POST http://localhost:8000/webhooks/pagerduty \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": {
+      "event_type": "incident.triggered",
+      "data": {
+        "id": "Q1A2B3C4",
+        "title": "HikariPool connection not available — user-service",
+        "urgency": "high",
+        "service": {"name": "user-service"},
+        "created_at": "2025-04-10T03:22:00Z",
+        "body": {"details": "HikariPool-1 - Connection is not available, request timed out after 30000ms"}
+      }
+    }
+  }'
+```
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "indexed": 1,
+  "incident_id": "Q1A2B3C4",
+  "source": "pagerduty_webhook"
+}
+```
+
+Then search for it immediately:
+```bash
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "HikariPool connection not available", "top_k": 3}'
+```
+
+### Online (production)
+
+In PagerDuty: **Service → Integrations → Add webhook**
+Set URL to: `https://your-backend.up.railway.app/webhooks/pagerduty`
+
+Every new incident PagerDuty triggers will be automatically indexed into VectorAI DB and searchable within seconds.
