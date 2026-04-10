@@ -87,7 +87,7 @@ export default function Home() {
             icon={DatabaseIcon}
             label="Index"
             active={view === 'index'}
-            onClick={() => setView('index')}
+            onClick={() => { setView('index'); setTriageBrief(null) }}
           />
         </nav>
 
@@ -133,7 +133,7 @@ export default function Home() {
           ].map(({ id, Icon, label }) => (
             <button
               key={id}
-              onClick={() => setView(id)}
+              onClick={() => { setView(id); if (id === 'index') setTriageBrief(null) }}
               className={[
                 'flex items-center gap-1.5 px-3 py-1.5 rounded font-mono text-xs tracking-wide border transition-all duration-150',
                 view === id

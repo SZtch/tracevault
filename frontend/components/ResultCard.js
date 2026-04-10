@@ -230,19 +230,22 @@ export default function ResultCard({ result, rank }) {
                   {hint}
                 </span>
               ))}
-              {/* Fallback: primary signal when no context hints fired */}
-              {contextHints.length === 0 && primarySignal !== 'semantic' && (
-                <span
-                  className="font-mono text-[10px] px-2 py-0.5 rounded"
-                  style={{
-                    background:  'rgba(255,255,255,0.04)',
-                    border:      '1px solid rgba(255,255,255,0.07)',
-                    color:       'var(--text-dim)',
-                  }}
-                >
-                  {PRIMARY_SIGNAL_LABEL[primarySignal] ?? primarySignal}
-                </span>
-              )}
+            </div>
+          )}
+
+          {/* Fallback: primary signal chip when no context hints fired */}
+          {contextHints.length === 0 && primarySignal !== 'semantic' && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              <span
+                className="font-mono text-[10px] px-2 py-0.5 rounded"
+                style={{
+                  background:  'rgba(255,255,255,0.04)',
+                  border:      '1px solid rgba(255,255,255,0.07)',
+                  color:       'var(--text-dim)',
+                }}
+              >
+                {PRIMARY_SIGNAL_LABEL[primarySignal] ?? primarySignal}
+              </span>
             </div>
           )}
 

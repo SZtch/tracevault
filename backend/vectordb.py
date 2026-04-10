@@ -496,6 +496,11 @@ def search_incidents(
 
 
 def get_status() -> Dict[str, Any]:
+    embedding_status = (
+        "all-MiniLM-L6-v2"
+        if _ST_AVAILABLE
+        else "hash-fallback (sentence-transformers not loaded — semantic quality degraded)"
+    )
     try:
         with get_client() as client:
             exists      = client.collections.exists(COLLECTION)
@@ -513,9 +518,15 @@ def get_status() -> Dict[str, Any]:
                 "db_addr":           DB_ADDR,
                 "collection":        COLLECTION,
                 "dim":               DIM,
+                "embedding_model":   embedding_status,
             }
     except Exception as e:
-        return {"connected": False, "error": str(e), "db_addr": DB_ADDR}
+        return {
+            "connected":       False,
+            "error":           str(e),
+            "db_addr":         DB_ADDR,
+            "embedding_model": embedding_status,
+        }
 
 
 def get_collection_meta() -> Dict[str, Any]:

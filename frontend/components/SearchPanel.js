@@ -85,7 +85,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
 
   function handleDemo(dq) {
     setQuery(dq.query)
-    setTimeout(() => runSearch(dq.query), 30)
+    runSearch(dq.query)
   }
 
   return (
