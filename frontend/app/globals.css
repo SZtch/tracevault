@@ -48,7 +48,7 @@
   --danger-dim:     rgba(239, 68, 68, 0.09);
   --danger-border:  rgba(239, 68, 68, 0.20);
 
-  /* Legacy aliases — kept for compatibility */
+  /* Legacy aliases */
   --red:            #EF4444;
   --red-dim:        rgba(239, 68, 68, 0.09);
   --red-border:     rgba(239, 68, 68, 0.20);
@@ -87,7 +87,7 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
-/* ── Subtle dot-grid texture ────────────────────────────────────────────── */
+/* ── Dot-grid texture ───────────────────────────────────────────────────── */
 .dot-bg {
   background-image: radial-gradient(circle, rgba(38, 50, 72, 0.7) 1px, transparent 1px);
   background-size: 24px 24px;
@@ -129,18 +129,12 @@ html, body {
 
 /* Staggered card entrance */
 .result-card:nth-child(1) { animation-delay: 0ms;   }
-.result-card:nth-child(2) { animation-delay: 35ms;  }
-.result-card:nth-child(3) { animation-delay: 70ms;  }
-.result-card:nth-child(4) { animation-delay: 105ms; }
-.result-card:nth-child(5) { animation-delay: 140ms; }
+.result-card:nth-child(2) { animation-delay: 40ms;  }
+.result-card:nth-child(3) { animation-delay: 80ms;  }
+.result-card:nth-child(4) { animation-delay: 120ms; }
+.result-card:nth-child(5) { animation-delay: 160ms; }
 
-/* ── Severity left bars ─────────────────────────────────────────────────── */
-.sev-critical { border-left-color: var(--danger)      !important; }
-.sev-high     { border-left-color: var(--warning)     !important; }
-.sev-medium   { border-left-color: var(--warning-alt) !important; }
-.sev-low      { border-left-color: var(--success)     !important; }
-
-/* ── Severity badges ────────────────────────────────────────────────────── */
+/* ── Severity badges ─────────────────────────────────────────────────────── */
 .badge-critical { background: rgba(239,68,68,0.09);   color: var(--danger);      border: 1px solid rgba(239,68,68,0.22);  }
 .badge-high     { background: rgba(245,158,11,0.10);  color: var(--warning);     border: 1px solid rgba(245,158,11,0.22); }
 .badge-medium   { background: rgba(234,179,8,0.09);   color: var(--warning-alt); border: 1px solid rgba(234,179,8,0.22);  }
@@ -172,13 +166,20 @@ html, body {
   border-radius: 4px;
 }
 
-/* ── Query textarea focus ───────────────────────────────────────────────── */
+/* ── Query textarea ─────────────────────────────────────────────────────── */
 .query-input {
   font-family: var(--mono);
-}
-.query-input:focus {
+  font-size: 12.5px;
+  line-height: 1.65;
+  resize: none;
+  width: 100%;
   outline: none;
-  border-color: var(--accent);
+  color: var(--text-bright);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.query-input::placeholder { color: var(--text-dim); font-size: 12px; }
+.query-input:focus {
+  border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
@@ -193,13 +194,34 @@ html, body {
 }
 .filter-select:focus { outline: none; border-color: var(--accent); color: var(--text-bright); }
 
-/* ── Nav active state ───────────────────────────────────────────────────── */
-.nav-active {
-  background:  var(--accent-dim)  !important;
-  color:       var(--accent)      !important;
-  border:      1px solid var(--accent-mid)   !important;
-  border-left: 2px solid var(--accent)       !important;
-  padding-left: 10px !important;
+/* ── Nav item ────────────────────────────────────────────────────────────── */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+  cursor: pointer;
+  text-align: left;
+  background: transparent;
+}
+.nav-item:hover {
+  color: var(--text);
+  background: var(--bg-4);
+  border-color: var(--border);
+}
+.nav-item-active {
+  background:   var(--accent-dim)  !important;
+  color:        var(--accent)      !important;
+  border:       1px solid var(--accent-mid)  !important;
+  border-left:  2px solid var(--accent)      !important;
+  padding-left: 11px !important;
 }
 
 /* ── Nav section label ──────────────────────────────────────────────────── */
@@ -228,7 +250,7 @@ html, body {
   margin-bottom:  8px;
 }
 
-/* ── Card section divider ───────────────────────────────────────────────── */
+/* ── Card divider ─────────────────────────────────────────────────────── */
 .card-divider {
   border:     none;
   border-top: 1px solid var(--border);
@@ -236,29 +258,55 @@ html, body {
   opacity:    0.6;
 }
 
-/* ── Triage Brief internal divider ─────────────────────────────────────── */
+/* ── Triage brief divider ────────────────────────────────────────────── */
 .brief-divider {
   border:     none;
   border-top: 1px solid rgba(79, 140, 255, 0.12);
   margin:     0;
 }
 
-/* ── Score track ────────────────────────────────────────────────────────── */
+/* ── Score track ─────────────────────────────────────────────────────── */
 .score-track {
-  height:       3px;
-  width:        52px;
+  height:        3px;
+  width:         52px;
   border-radius: 99px;
-  background:   var(--bg-5);
-  overflow:     hidden;
-  flex-shrink:  0;
+  background:    var(--bg-5);
+  overflow:      hidden;
+  flex-shrink:   0;
 }
 .score-fill {
-  height:       100%;
+  height:        100%;
   border-radius: 99px;
-  transition:   width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:    width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ── File input hidden ──────────────────────────────────────────────────── */
+/* ── File input hidden ───────────────────────────────────────────────── */
 .file-input-hidden {
   position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;
+}
+
+/* ── Search box (hero) ───────────────────────────────────────────────── */
+.search-box {
+  background:  var(--bg-3);
+  border:      1px solid var(--border-bright);
+  border-radius: var(--radius-md);
+  box-shadow:  0 2px 24px rgba(0, 0, 0, 0.35);
+  overflow:    hidden;
+  transition:  border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow:   0 2px 24px rgba(0, 0, 0, 0.35), 0 0 0 3px var(--accent-glow);
+}
+
+/* ── Triage right panel section label ───────────────────────────────── */
+.triage-section-label {
+  font-family:    var(--mono);
+  font-size:      8.5px;
+  font-weight:    600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color:          var(--text-dim);
+  margin-bottom:  10px;
+  display:        block;
 }

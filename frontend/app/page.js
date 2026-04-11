@@ -1,38 +1,22 @@
 'use client'
 
 import { useState } from 'react'
-import SearchPanel from '@/components/SearchPanel'
 import ResultCard from '@/components/ResultCard'
 import StatusBar from '@/components/StatusBar'
 import IndexPanel from '@/components/IndexPanel'
 import TriageBrief from '@/components/TriageBrief'
 import DashboardPanel from '@/components/DashboardPanel'
+import SearchPanel from '@/components/SearchPanel'
 import { SearchIcon, DatabaseIcon, ZapIcon, ActivityIcon } from '@/components/Icons'
 
-// ── Sidebar nav item ───────────────────────────────────────────────────────
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
-    <button
-      onClick={onClick}
-      className={[
-        'flex items-center gap-3 w-full px-3 py-2 rounded-md text-left transition-all duration-150',
-        'text-sm font-medium border border-transparent',
-        active
-          ? 'nav-active'
-          : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--bg-4)] hover:border-[var(--border)]',
-      ].join(' ')}
-    >
+    <button onClick={onClick} className={`nav-item ${active ? 'nav-item-active' : ''}`}>
       <Icon className="w-4 h-4 flex-shrink-0" />
       {label}
     </button>
   )
 }
-
-const SAMPLE_QUERIES = [
-  'connection pool exhausted',
-  'gRPC deadline exceeded',
-  'OOMKilled pod restart',
-]
 
 export default function Home() {
   const [results,     setResults]     = useState([])
@@ -40,41 +24,36 @@ export default function Home() {
   const [loading,     setLoading]     = useState(false)
   const [view,        setView]        = useState('search')
   const [triageBrief, setTriageBrief] = useState(null)
+  const [searched,    setSearched]    = useState(false)
+  const [searchError, setSearchError] = useState(null)
+
+  function switchView(v) {
+    setView(v)
+    if (v !== 'search') { setTriageBrief(null); setSearched(false) }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
 
-      {/* ── Desktop Sidebar ─────────────────────────────────────────────── */}
+      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
       <aside
-        className="hidden lg:flex flex-col w-56 flex-shrink-0 border-r"
-        style={{ background: 'var(--bg-2)', borderColor: 'var(--border)' }}
+        className="hidden lg:flex flex-col w-56 flex-shrink-0"
+        style={{ background: 'var(--bg-2)', borderRight: '1px solid var(--border)' }}
       >
         {/* Logo */}
-        <div
-          className="flex items-center gap-3 px-5 py-5 border-b"
-          style={{ borderColor: 'var(--border)' }}
-        >
+        <div className="flex items-center gap-3 px-5 py-5" style={{ borderBottom: '1px solid var(--border)' }}>
           <div
             className="flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
-            style={{
-              background: 'var(--accent-dim)',
-              border:     '1px solid var(--accent-mid)',
-            }}
+            style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-mid)' }}
           >
             <ZapIcon className="w-4 h-4" style={{ color: 'var(--accent)' }} />
           </div>
           <div>
-            <div
-              className="font-semibold text-[15px] tracking-tight"
-              style={{ color: 'var(--text-bright)', fontFamily: 'var(--sans)' }}
-            >
+            <div className="font-semibold text-[15px] tracking-tight" style={{ color: 'var(--text-bright)' }}>
               TraceVault
             </div>
-            <div
-              className="font-mono text-[9px] tracking-widest uppercase mt-0.5"
-              style={{ color: 'var(--text-faint)' }}
-            >
-              Incident Search
+            <div className="font-mono text-[8px] tracking-widest uppercase mt-0.5" style={{ color: 'var(--text-faint)' }}>
+              Incident Intelligence
             </div>
           </div>
         </div>
@@ -82,48 +61,40 @@ export default function Home() {
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5">
           <div className="nav-section mb-2">Workspace</div>
-          <NavItem icon={SearchIcon}   label="Search"    active={view === 'search'}    onClick={() => setView('search')} />
-          <NavItem icon={DatabaseIcon} label="Index"     active={view === 'index'}     onClick={() => { setView('index');     setTriageBrief(null) }} />
-          <NavItem icon={ActivityIcon} label="Dashboard" active={view === 'dashboard'} onClick={() => { setView('dashboard'); setTriageBrief(null) }} />
+          <NavItem icon={SearchIcon}   label="Search"    active={view === 'search'}    onClick={() => switchView('search')} />
+          <NavItem icon={DatabaseIcon} label="Index"     active={view === 'index'}     onClick={() => switchView('index')} />
+          <NavItem icon={ActivityIcon} label="Dashboard" active={view === 'dashboard'} onClick={() => switchView('dashboard')} />
         </nav>
 
-        {/* Status footer */}
-        <div className="px-4 py-4 border-t" style={{ borderColor: 'var(--border)' }}>
+        {/* Status */}
+        <div className="px-4 py-4" style={{ borderTop: '1px solid var(--border)' }}>
           <StatusBar />
         </div>
       </aside>
 
-      {/* ── Mobile Top Bar ──────────────────────────────────────────────── */}
+      {/* ── Mobile top bar ──────────────────────────────────────────────── */}
       <div
-        className="lg:hidden fixed top-0 inset-x-0 z-40 flex items-center justify-between px-4 border-b"
-        style={{ background: 'var(--bg-2)', borderColor: 'var(--border)', height: '50px' }}
+        className="lg:hidden fixed top-0 inset-x-0 z-40 flex items-center justify-between px-4"
+        style={{ background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', height: '50px' }}
       >
         <div className="flex items-center gap-2">
-          <div
-            className="flex items-center justify-center w-6 h-6 rounded-md"
-            style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-mid)' }}
-          >
+          <div className="flex items-center justify-center w-6 h-6 rounded-md"
+            style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-mid)' }}>
             <ZapIcon className="w-3 h-3" style={{ color: 'var(--accent)' }} />
           </div>
-          <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--text-bright)' }}>
-            TraceVault
-          </span>
+          <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--text-bright)' }}>TraceVault</span>
         </div>
         <div className="flex gap-1">
           {[
-            { id: 'search',    Icon: SearchIcon,    label: 'Search'    },
-            { id: 'index',     Icon: DatabaseIcon,  label: 'Index'     },
-            { id: 'dashboard', Icon: ActivityIcon,  label: 'Dashboard' },
+            { id: 'search', Icon: SearchIcon, label: 'Search' },
+            { id: 'index',  Icon: DatabaseIcon, label: 'Index' },
+            { id: 'dashboard', Icon: ActivityIcon, label: 'Dashboard' },
           ].map(({ id, Icon, label }) => (
             <button
               key={id}
-              onClick={() => { setView(id); if (id !== 'search') setTriageBrief(null) }}
-              className={[
-                'flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-all duration-150',
-                view === id
-                  ? 'nav-active'
-                  : 'border-transparent text-[var(--text-dim)] hover:text-[var(--text)]',
-              ].join(' ')}
+              onClick={() => switchView(id)}
+              className={`nav-item ${view === id ? 'nav-item-active' : ''}`}
+              style={{ padding: '5px 10px', fontSize: '12px', width: 'auto' }}
             >
               <Icon className="w-3.5 h-3.5" />
               {label}
@@ -132,138 +103,155 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Main content ────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden lg:pt-0 pt-[50px]">
+      {/* ── Content area ────────────────────────────────────────────────── */}
+      <div className="flex-1 flex overflow-hidden lg:pt-0 pt-[50px]">
 
-        {view === 'search' ? (
+        {/* Non-search views */}
+        {view !== 'search' && (
+          <div className="flex-1 overflow-y-auto px-6 py-7 sm:px-8">
+            {view === 'dashboard' ? <DashboardPanel /> : <IndexPanel />}
+          </div>
+        )}
+
+        {/* Search view — 2-col: center + right triage */}
+        {view === 'search' && (
           <>
-            <SearchPanel
-              query={query}
-              setQuery={setQuery}
-              setResults={setResults}
-              setLoading={setLoading}
-              loading={loading}
-              setTriageBrief={setTriageBrief}
-            />
+            {/* ── Center column ─────────────────────────────────────── */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto px-6 py-7 sm:px-8 dot-bg">
 
-            <div
-              className="flex-1 overflow-y-auto px-6 py-6 sm:px-8 dot-bg"
-              style={{ background: 'var(--bg)' }}
-            >
-              {/* Loading */}
-              {loading && (
-                <div className="animate-fade-in">
-                  <div className="flex items-center gap-3 mb-5">
-                    <div className="animate-pulse-dot w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: 'var(--accent)' }} />
-                    <span className="text-sm" style={{ color: 'var(--text-dim)' }}>
-                      Scanning incident vault…
-                    </span>
-                  </div>
-                  <div className="search-shimmer" />
-                  {[1, 2, 3].map(i => (
-                    <div
-                      key={i}
-                      className="rounded-xl mb-3 border-l-2 border-l-transparent"
-                      style={{ background: 'var(--bg-3)', border: '1px solid var(--border)', padding: '20px 22px', opacity: 1 - i * 0.22 }}
-                    >
-                      <div className="flex justify-between mb-3">
-                        <div className="flex gap-2">
-                          <div className="skeleton h-3 w-8 rounded" />
-                          <div className="skeleton h-3 w-24 rounded" />
-                          <div className="skeleton h-3 w-16 rounded" />
-                        </div>
-                        <div className="skeleton h-3 w-20 rounded" />
-                      </div>
-                      <div className="skeleton h-5 w-3/5 rounded mb-3" />
-                      <div className="skeleton h-3 w-full rounded mb-2" />
-                      <div className="skeleton h-3 w-4/5 rounded" />
-                    </div>
-                  ))}
+                {/* Hero headline */}
+                <div className="mb-6">
+                  <h1
+                    className="font-bold leading-tight mb-2"
+                    style={{
+                      fontFamily:    'var(--sans)',
+                      fontSize:      'clamp(22px, 2.8vw, 32px)',
+                      color:         'var(--text-bright)',
+                      letterSpacing: '-0.02em',
+                    }}
+                  >
+                    Find what broke{' '}
+                    <span style={{ color: 'var(--accent)' }}>like this before.</span>
+                  </h1>
+                  <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                    Paste an issue, stack trace, or raw log to identify historical patterns.
+                  </p>
                 </div>
-              )}
 
-              {/* Empty — no query yet */}
-              {!loading && results.length === 0 && !query && (
-                <div className="animate-fade-in flex flex-col items-center justify-center min-h-[380px] text-center">
-                  <div
-                    className="flex items-center justify-center w-12 h-12 rounded-xl mb-6"
-                    style={{ background: 'var(--bg-3)', border: '1px solid var(--border-bright)' }}
-                  >
-                    <SearchIcon className="w-5 h-5" style={{ color: 'var(--text-dim)' }} />
-                  </div>
-                  <p
-                    className="font-mono text-[10px] tracking-widest uppercase mb-3"
-                    style={{ color: 'var(--text-dim)' }}
-                  >
-                    Incident Similarity Search
-                  </p>
-                  <p className="text-base max-w-sm leading-relaxed mb-2" style={{ color: 'var(--text)' }}>
-                    Paste an error message, stack trace, or alert description.
-                  </p>
-                  <p className="text-sm max-w-xs leading-relaxed mb-7" style={{ color: 'var(--text-dim)' }}>
-                    TraceVault surfaces the closest past incidents — ranked by similarity,
-                    with root causes and confirmed fixes attached.
-                  </p>
-                  <div className="flex flex-wrap gap-2 justify-center">
-                    {SAMPLE_QUERIES.map(q => (
-                      <button
-                        key={q}
-                        onClick={() => setQuery(q)}
-                        className="font-mono text-[11px] px-3 py-1.5 rounded-md border transition-all duration-150"
-                        style={{ background: 'var(--bg-3)', borderColor: 'var(--border-bright)', color: 'var(--text-dim)' }}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-mid)'; e.currentTarget.style.color = 'var(--text)'; e.currentTarget.style.background = 'var(--bg-4)' }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-bright)'; e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'var(--bg-3)' }}
+                {/* Search box */}
+                <SearchPanel
+                  query={query}
+                  setQuery={setQuery}
+                  setResults={setResults}
+                  setLoading={setLoading}
+                  loading={loading}
+                  setTriageBrief={setTriageBrief}
+                  setSearched={setSearched}
+                  setSearchError={setSearchError}
+                  searchError={searchError}
+                />
+
+                {/* Loading */}
+                {loading && (
+                  <div className="mt-6 animate-fade-in">
+                    <div className="flex items-center gap-2.5 mb-4">
+                      <div className="animate-pulse-dot w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: 'var(--accent)' }} />
+                      <span className="font-mono text-[11px]" style={{ color: 'var(--text-dim)' }}>scanning incident vault…</span>
+                    </div>
+                    <div className="search-shimmer" />
+                    {[1, 2].map(i => (
+                      <div
+                        key={i}
+                        className="mb-3 rounded-lg overflow-hidden"
+                        style={{
+                          background:  'var(--bg-3)',
+                          border:      '1px solid var(--border)',
+                          borderLeft:  '3px solid var(--border-bright)',
+                          opacity:     1 - i * 0.28,
+                        }}
                       >
-                        {q}
-                      </button>
+                        <div className="flex items-start gap-3 p-5 pb-4">
+                          <div className="skeleton w-8 h-8 rounded-full flex-shrink-0" />
+                          <div className="flex-1">
+                            <div className="skeleton h-4 w-44 rounded mb-2" />
+                            <div className="skeleton h-3 w-64 rounded" />
+                          </div>
+                          <div className="skeleton h-8 w-12 rounded" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 px-5 pb-4" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px' }}>
+                          <div>
+                            <div className="skeleton h-2.5 w-24 rounded mb-2" />
+                            <div className="skeleton h-3 w-full rounded mb-1.5" />
+                            <div className="skeleton h-3 w-4/5 rounded" />
+                          </div>
+                          <div>
+                            <div className="skeleton h-2.5 w-24 rounded mb-2" />
+                            <div className="skeleton h-3 w-full rounded mb-1.5" />
+                            <div className="skeleton h-3 w-3/4 rounded" />
+                          </div>
+                        </div>
+                      </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* Empty — searched, no results */}
-              {!loading && results.length === 0 && query && (
-                <div className="animate-fade-in flex flex-col items-center justify-center min-h-[280px] text-center">
-                  <p className="text-sm mb-1.5" style={{ color: 'var(--text-dim)' }}>No similar incidents found</p>
-                  <p className="text-sm" style={{ color: 'var(--text-faint)' }}>
-                    Try a different query or load sample data via the Index tab.
-                  </p>
-                </div>
-              )}
+                {/* Empty — before first search */}
+                {!loading && !searched && (
+                  <div className="mt-8 flex flex-col items-center justify-center py-6 text-center">
+                    <p className="font-mono text-[10px] tracking-widest uppercase mb-2" style={{ color: 'var(--text-faint)' }}>
+                      Ready to scan
+                    </p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                      Results will appear here after searching.
+                    </p>
+                  </div>
+                )}
 
-              {/* Triage Brief */}
-              {!loading && triageBrief && results.length > 0 && (
-                <TriageBrief brief={triageBrief} />
-              )}
+                {/* No results after search */}
+                {!loading && searched && results.length === 0 && (
+                  <div className="mt-6 flex flex-col items-center justify-center py-6 text-center">
+                    <p className="text-sm mb-1" style={{ color: 'var(--text-dim)' }}>No similar incidents found.</p>
+                    <p className="text-sm" style={{ color: 'var(--text-faint)' }}>
+                      Try a different query or load sample data via Index.
+                    </p>
+                  </div>
+                )}
 
-              {/* Results header */}
-              {!loading && results.length > 0 && (
-                <div className="flex items-baseline gap-3 mb-4 animate-fade-in flex-wrap">
-                  <span
-                    className="font-mono text-[11px] font-semibold tracking-widest uppercase"
-                    style={{ color: 'var(--accent)' }}
-                  >
-                    {results.length} match{results.length !== 1 ? 'es' : ''}
-                  </span>
-                  <span className="font-mono text-[11px] truncate max-w-md" style={{ color: 'var(--text-dim)' }}>
-                    &ldquo;{query.trim().slice(0, 90)}{query.trim().length > 90 ? '…' : ''}&rdquo;
-                  </span>
-                </div>
-              )}
+                {/* Results header */}
+                {!loading && results.length > 0 && (
+                  <div className="mt-6 flex items-center gap-3 mb-4 animate-fade-in">
+                    <span className="font-mono text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--text-mid)' }}>
+                      Matching Incidents
+                    </span>
+                    <span
+                      className="font-mono text-[9px] px-2 py-0.5 rounded"
+                      style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-mid)', color: 'var(--accent)' }}
+                    >
+                      {results.length} Matches Found
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <span className="font-mono text-[9px]" style={{ color: 'var(--text-faint)' }}>Sort by:</span>
+                      <span className="font-mono text-[9px] font-semibold" style={{ color: 'var(--text-dim)' }}>Similarity ↓</span>
+                    </div>
+                  </div>
+                )}
 
-              {!loading && results.map((r, i) => (
-                <ResultCard key={r.incident_id || String(r.id)} result={r} rank={i + 1} />
-              ))}
+                {/* Result cards */}
+                {!loading && results.map((r, i) => (
+                  <ResultCard key={r.incident_id || String(r.id)} result={r} rank={i + 1} />
+                ))}
+              </div>
+            </div>
+
+            {/* ── Right panel: Triage Brief ─────────────────────────── */}
+            <div
+              className="hidden xl:flex flex-col w-72 flex-shrink-0 overflow-y-auto"
+              style={{ background: 'var(--bg-2)', borderLeft: '1px solid var(--border)' }}
+            >
+              <TriageBrief brief={triageBrief} loading={loading} searched={searched} />
             </div>
           </>
-        ) : view === 'dashboard' ? (
-          <div className="flex-1 overflow-y-auto px-6 py-7 sm:px-8">
-            <DashboardPanel />
-          </div>
-        ) : (
-          <div className="flex-1 overflow-y-auto px-6 py-7 sm:px-8">
-            <IndexPanel />
-          </div>
         )}
       </div>
     </div>
