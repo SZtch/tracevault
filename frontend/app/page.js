@@ -6,7 +6,8 @@ import ResultCard from '@/components/ResultCard'
 import StatusBar from '@/components/StatusBar'
 import IndexPanel from '@/components/IndexPanel'
 import TriageBrief from '@/components/TriageBrief'
-import { SearchIcon, DatabaseIcon, ZapIcon } from '@/components/Icons'
+import DashboardPanel from '@/components/DashboardPanel'
+import { SearchIcon, DatabaseIcon, ZapIcon, ActivityIcon } from '@/components/Icons'
 
 // ── Sidebar nav item ───────────────────────────────────────────────────────
 function NavItem({ icon: Icon, label, active, onClick }) {
@@ -31,7 +32,7 @@ export default function Home() {
   const [results, setResults]         = useState([])
   const [query,   setQuery]           = useState('')
   const [loading, setLoading]         = useState(false)
-  const [view,    setView]            = useState('search')    // 'search' | 'index'
+  const [view,    setView]            = useState('search')    // 'search' | 'index' | 'dashboard'
   const [triageBrief, setTriageBrief] = useState(null)
 
   return (
@@ -89,6 +90,12 @@ export default function Home() {
             active={view === 'index'}
             onClick={() => { setView('index'); setTriageBrief(null) }}
           />
+          <NavItem
+            icon={ActivityIcon}
+            label="Dashboard"
+            active={view === 'dashboard'}
+            onClick={() => { setView('dashboard'); setTriageBrief(null) }}
+          />
         </nav>
 
         {/* Status footer */}
@@ -128,8 +135,9 @@ export default function Home() {
         {/* Mobile nav tabs */}
         <div className="flex gap-1">
           {[
-            { id: 'search', Icon: SearchIcon,   label: 'Search' },
-            { id: 'index',  Icon: DatabaseIcon, label: 'Index'  },
+            { id: 'search',    Icon: SearchIcon,    label: 'Search'    },
+            { id: 'index',     Icon: DatabaseIcon,  label: 'Index'     },
+            { id: 'dashboard', Icon: ActivityIcon,  label: 'Dashboard' },
           ].map(({ id, Icon, label }) => (
             <button
               key={id}
@@ -272,6 +280,10 @@ export default function Home() {
               ))}
             </div>
           </>
+        ) : view === 'dashboard' ? (
+          <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+            <DashboardPanel />
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
             <IndexPanel />

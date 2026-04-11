@@ -219,12 +219,17 @@ class SearchRequest(BaseModel):
     - top_k is capped to [1, 50] — prevents accidental full-collection scans.
     - severity must be one of the four canonical levels or omitted.
     - service is a freeform string filter (matched by the DB).
+    - date_from / date_to are inclusive YYYY-MM-DD bounds (Python-side filtered).
+    - tags is a list of tag strings; incident must match at least one.
     """
 
-    query:    str                                         = Field(..., min_length=1, max_length=1000)
-    top_k:    Annotated[int, Field(ge=1, le=50)]         = 5
-    severity: Optional[SeverityLiteral]                  = None
-    service:  Optional[str]                              = Field(None, max_length=100)
+    query:     str                                         = Field(..., min_length=1, max_length=1000)
+    top_k:     Annotated[int, Field(ge=1, le=50)]         = 5
+    severity:  Optional[SeverityLiteral]                  = None
+    service:   Optional[str]                              = Field(None, max_length=100)
+    date_from: Optional[str]                              = None
+    date_to:   Optional[str]                              = None
+    tags:      Optional[List[str]]                        = None
 
     @field_validator("query", mode="after")
     @classmethod
@@ -239,6 +244,15 @@ class SearchRequest(BaseModel):
     def _strip_service(cls, v: Any) -> Any:
         if isinstance(v, str):
             return v.strip() or None
+        return v
+
+    @field_validator("date_from", "date_to", mode="after")
+    @classmethod
+    def _validate_date_filter(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        if not _ISO_DATE_RE.match(v):
+            raise ValueError(f"date filter must be YYYY-MM-DD, got {v!r}")
         return v
 
 
@@ -441,10 +455,13 @@ def search(req: SearchRequest):
     """Semantic similarity search with match explanation and optional triage brief."""
     try:
         results = search_incidents(
-            query    = req.query,
-            top_k    = req.top_k,
-            severity = req.severity,
-            service  = req.service,
+            query     = req.query,
+            top_k     = req.top_k,
+            severity  = req.severity,
+            service   = req.service,
+            date_from = req.date_from,
+            date_to   = req.date_to,
+            tags      = req.tags or None,
         )
         # Generate triage brief from retrieved incidents only.
         # Returns None if ANTHROPIC_API_KEY is unset or the call fails —
@@ -705,6 +722,210 @@ def resolution_stats():
         "top_resolvers":   top_resolvers,
         "recent":          recent,
     }
+
+
+
+# ── Analytics: Dashboard ──────────────────────────────────────────────────────
+
+@app.get("/analytics/dashboard")
+def dashboard():
+    """
+    Aggregated incident metrics for the dashboard view.
+    Returns severity breakdown, top services, resolution stats, and recent incidents.
+    """
+    try:
+        incidents = get_all_incidents()
+    except Exception as e:
+        raise _db_error(e)
+
+    if not incidents:
+        return {
+            "total_incidents":  0,
+            "by_severity":      {},
+            "by_service":       [],
+            "resolution_rate":  0.0,
+            "open_count":       0,
+            "resolved_count":   0,
+            "confirmed_count":  0,
+            "recent_incidents": [],
+        }
+
+    from collections import Counter
+
+    severity_counts = Counter(i.get("severity", "medium") for i in incidents)
+    service_counts  = Counter(i.get("service") for i in incidents if i.get("service"))
+
+    statuses        = [i.get("resolution_status", "open") for i in incidents]
+    resolved_count  = sum(1 for s in statuses if s in ("resolved", "confirmed"))
+    confirmed_count = sum(1 for s in statuses if s == "confirmed")
+    open_count      = len(incidents) - resolved_count
+    resolution_rate = round(resolved_count / len(incidents) * 100, 1)
+
+    sorted_by_date = sorted(
+        [i for i in incidents if i.get("date")],
+        key=lambda x: x.get("date", ""),
+        reverse=True,
+    )
+    recent_incidents = [
+        {
+            "incident_id":       i.get("incident_id") or i.get("id"),
+            "title":             i.get("title"),
+            "service":           i.get("service"),
+            "severity":          i.get("severity"),
+            "date":              i.get("date"),
+            "resolution_status": i.get("resolution_status", "open"),
+        }
+        for i in sorted_by_date[:10]
+    ]
+
+    top_services = [
+        {"service": svc, "count": cnt}
+        for svc, cnt in service_counts.most_common(10)
+    ]
+
+    return {
+        "total_incidents":  len(incidents),
+        "by_severity":      dict(severity_counts),
+        "by_service":       top_services,
+        "resolution_rate":  resolution_rate,
+        "open_count":       open_count,
+        "resolved_count":   resolved_count,
+        "confirmed_count":  confirmed_count,
+        "recent_incidents": recent_incidents,
+    }
+
+
+# ── Webhook: Slack ingest ─────────────────────────────────────────────────────
+
+class SlackWebhook(BaseModel):
+    """
+    Accepts Slack alert-style webhook payloads. Two supported formats:
+
+    Simple (alert manager / Slack app):
+      {"text": "CRITICAL: pool exhausted", "username": "my-service",
+       "attachments": [{"title": "...", "text": "...", "color": "danger"}]}
+
+    Rich structured (direct incident ingest):
+      {"incident": {"title": "...", "service": "...", "severity": "high", ...}}
+    """
+    class Config:
+        extra = "allow"
+
+    text:        Optional[str]                  = None
+    username:    Optional[str]                  = None
+    attachments: Optional[List[Dict[str, Any]]] = None
+    incident:    Optional[Dict[str, Any]]       = None
+
+
+def _normalize_slack(payload: SlackWebhook) -> Dict[str, Any]:
+    """Map Slack webhook fields to TraceVault incident schema."""
+    if payload.incident:
+        inc = payload.incident
+        return {
+            "id":            inc.get("id"),
+            "title":         (inc.get("title") or "Untitled Slack alert")[:300],
+            "service":       inc.get("service"),
+            "severity":      inc.get("severity", "medium"),
+            "date":          inc.get("date"),
+            "error_message": (inc.get("error_message") or inc.get("description", ""))[:2000] or None,
+            "root_cause":    inc.get("root_cause", "Unknown at ingest time — update after investigation."),
+            "fix":           inc.get("fix", "Pending investigation."),
+            "tags":          inc.get("tags", ["slack", "webhook"]),
+        }
+
+    # Simple Slack text/attachment path
+    title = ""
+    description = ""
+    severity = "medium"
+
+    if payload.attachments:
+        att         = payload.attachments[0]
+        title       = att.get("title") or att.get("fallback") or ""
+        description = att.get("text") or att.get("pretext") or ""
+        color       = att.get("color", "")
+        severity    = {"danger": "high", "warning": "medium", "good": "low"}.get(color, "medium")
+
+    if not title:
+        title = (payload.text or "")[:300] or "Untitled Slack alert"
+    if not description and payload.text:
+        description = payload.text
+
+    return {
+        "id":            None,
+        "title":         title[:300],
+        "service":       payload.username or None,
+        "severity":      severity,
+        "date":          None,
+        "error_message": description[:2000] if description else None,
+        "root_cause":    "Unknown at ingest time — update after investigation.",
+        "fix":           "Pending investigation.",
+        "tags":          ["slack", "webhook"],
+    }
+
+
+@app.post("/webhooks/slack")
+def webhook_slack(payload: SlackWebhook):
+    """
+    Ingest a Slack alert webhook and index it into VectorAI DB.
+
+    Simple format (alert manager):
+      curl -X POST http://localhost:8000/webhooks/slack \\
+        -H "Content-Type: application/json" \\
+        -d '{"text": "CRITICAL: HikariPool exhausted",
+             "username": "user-service",
+             "attachments": [{"title": "DB pool exhausted",
+                              "text": "Connection not available after 30s",
+                              "color": "danger"}]}'
+
+    Rich structured:
+      curl -X POST http://localhost:8000/webhooks/slack \\
+        -H "Content-Type: application/json" \\
+        -d '{"incident": {"title": "DB pool exhausted", "service": "user-service",
+                          "severity": "high", "error_message": "HikariPool timeout"}}'
+    """
+    if payload.text is None and payload.attachments is None and payload.incident is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Unrecognized Slack webhook format — expected 'text', 'attachments', or 'incident'",
+        )
+
+    try:
+        normalized = _normalize_slack(payload)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Payload normalization failed: {e}")
+
+    try:
+        incident = IncidentInput(**normalized)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Normalized payload failed schema validation",
+                "errors":  _pydantic_errors_to_list(exc),
+            },
+        )
+
+    try:
+        count = index_incidents([incident.to_dict()])
+
+        try:
+            query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
+            if query.strip():
+                similar = search_incidents(query=query, top_k=3)
+                brief   = generate_triage_brief(query=query, results=similar)
+                notify_slack_autopilot(incident=normalized, results=similar, brief=brief)
+        except Exception as autopilot_err:
+            log.warning("Autopilot error (non-fatal): %s", autopilot_err)
+
+        return {
+            "status":      "ok",
+            "indexed":     count,
+            "incident_id": normalized.get("id") or "(generated)",
+            "source":      "slack_webhook",
+            "autopilot":   "triggered",
+        }
+    except Exception as e:
+        raise _db_error(e)
 
 
 # ── Webhook: PagerDuty ingest ─────────────────────────────────────────────────

@@ -1,228 +1,287 @@
 #!/bin/bash
 # TraceVault Backend — Full Test Suite
-# Usage: bash test_backend.sh
+# Usage: bash test_backend.sh [base_url]
 # Requires: curl, jq
 
-BASE="http://localhost:8000"
+BASE="${1:-http://localhost:8000}"
 PASS=0
 FAIL=0
+START=$(date +%s)
 
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
+# ── Colors ────────────────────────────────────────────────────────────────────
+G='\033[0;32m'   # green
+R='\033[0;31m'   # red
+Y='\033[1;33m'   # yellow
+C='\033[0;36m'   # cyan
+D='\033[2m'      # dim
 NC='\033[0m'
 
-pass() { echo -e "  ${GREEN}✅ PASS${NC} $1"; PASS=$((PASS + 1)); }
-fail() { echo -e "  ${RED}❌ FAIL${NC} $1"; FAIL=$((FAIL + 1)); }
-section() { echo -e "\n${YELLOW}━━ $1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
-info() { echo -e "  ${CYAN}ℹ${NC}  $1"; }
+# ── Helpers ───────────────────────────────────────────────────────────────────
+pass()    { echo -e "  ${G}✓${NC} $1";        PASS=$((PASS+1)); }
+fail()    { echo -e "  ${R}✗${NC} $1";        FAIL=$((FAIL+1)); }
+info()    { echo -e "  ${D}→ $1${NC}"; }
+section() {
+  local title="$1"
+  local pad=$(printf '─%.0s' $(seq 1 $((48 - ${#title}))))
+  echo -e "\n${Y}  $title ${D}$pad${NC}"
+}
 
-# ── 1. Health & Meta ─────────────────────────────────────────────────────────
+expect_status() {
+  # expect_status LABEL METHOD URL [body] EXPECTED_CODE
+  local label="$1" method="$2" url="$3" body="$4" want="$5"
+  local got
+  if [ -n "$body" ]; then
+    got=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url" \
+      -H "Content-Type: application/json" -d "$body")
+  else
+    got=$(curl -s -o /dev/null -w "%{http_code}" -X "$method" "$url")
+  fi
+  [ "$got" = "$want" ] \
+    && pass "$label → $want" \
+    || fail "$label → $got (expected $want)"
+}
+
+# ── 1. Health & Meta ──────────────────────────────────────────────────────────
 section "1. Health & Meta"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE/health)
-[ "$STATUS" = "200" ] && pass "GET /health → 200" || fail "GET /health → $STATUS"
+HEALTH=$(curl -s "$BASE/health")
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health")
+[ "$STATUS" = "200" ] && pass "GET /health" || fail "GET /health → $STATUS"
 
-HEALTH=$(curl -s $BASE/health)
-info "Health: $(echo $HEALTH | jq -c '.')"
+COUNT=$(echo "$HEALTH" | jq '.incident_count // 0')
+info "$(echo "$HEALTH" | jq -c '{db: .connected, incidents: .incident_count, model: .embedding_model}')"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE/meta)
-[ "$STATUS" = "200" ] && pass "GET /meta → 200" || fail "GET /meta → $STATUS"
+expect_status "GET /meta" GET "$BASE/meta" "" "200"
+SERVICES=$(curl -s "$BASE/meta" | jq '.services | length')
+info "$SERVICES services in meta"
 
-META=$(curl -s $BASE/meta)
-SERVICES=$(echo $META | jq '.services | length')
-info "Meta: $SERVICES services found"
+# ── 2. Auto-index ─────────────────────────────────────────────────────────────
+section "2. Auto-index"
 
-# ── 2. Auto-index ────────────────────────────────────────────────────────────
-section "2. Auto-index (startup check)"
-
-# Use incident_count (points_count can be null in this SDK version)
-COUNT=$(curl -s $BASE/health | jq '.incident_count // 0')
 [ "$COUNT" -gt 0 ] \
   && pass "Auto-index OK — $COUNT incidents loaded" \
-  || fail "Collection kosong — cek AUTO_INDEX_DEFAULT=true di docker-compose.yml"
+  || fail "Collection empty — check AUTO_INDEX_DEFAULT=true"
 
-# ── 3. Manual index ──────────────────────────────────────────────────────────
-section "3. Index endpoints"
+# ── 3. Index endpoints ────────────────────────────────────────────────────────
+section "3. Index"
 
-RES=$(curl -s -w "\n%{http_code}" -X POST $BASE/index \
+RES=$(curl -s -w "\n%{http_code}" -X POST "$BASE/index" \
   -H "Content-Type: application/json" \
-  -d '{"incidents": [{
-    "id": "TEST-001",
-    "title": "Test incident connection pool exhausted",
-    "service": "test-service",
-    "severity": "high",
-    "error_message": "HikariPool connection not available",
-    "root_cause": "Max pool size reached under load",
-    "fix": "Increased pool size to 30",
-    "tags": ["connection-pool", "hikari"]
-  }]}')
+  -d '{"incidents": [{"id":"TEST-001","title":"Test connection pool exhausted",
+       "service":"test-service","severity":"high",
+       "error_message":"HikariPool connection not available",
+       "root_cause":"Max pool size reached","fix":"Increased pool size to 30",
+       "tags":["connection-pool","hikari"]}]}')
 STATUS=$(echo "$RES" | tail -1)
-[ "$STATUS" = "200" ] && pass "POST /index single incident → 200" || fail "POST /index → $STATUS | $(echo "$RES" | head -1 | jq -c '.detail // .' 2>/dev/null)"
+[ "$STATUS" = "200" ] \
+  && pass "POST /index (single incident)" \
+  || fail "POST /index → $STATUS | $(echo "$RES" | head -1 | jq -c '.detail // .' 2>/dev/null)"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/index/default)
-[ "$STATUS" = "200" ] && pass "POST /index/default → 200" || fail "POST /index/default → $STATUS"
+expect_status "POST /index/default" POST "$BASE/index/default" "" "200"
 
-# ── 4. Search ────────────────────────────────────────────────────────────────
+# ── 4. Search ─────────────────────────────────────────────────────────────────
 section "4. Search"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "hikari pool exhausted during high traffic", "top_k": 3}')
-COUNT=$(echo $RES | jq '.count // 0')
-[ "$COUNT" -gt 0 ] && pass "Search basic → $COUNT results" || fail "Search basic → 0 results"
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"hikari pool exhausted during high traffic","top_k":3}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ "$COUNT" -gt 0 ] && pass "Basic search → $COUNT results" || fail "Basic search → 0 results"
 
-HAS_FIELDS=$(echo $RES | jq '[.results[0] | has("score","incident_id","match_reason","resolution_status","fix_confirmed")] | all')
-[ "$HAS_FIELDS" = "true" ] && pass "Search result fields OK (incl. resolution_status, fix_confirmed)" || fail "Search result missing fields — got: $(echo $RES | jq '.results[0] | keys')"
+HAS_FIELDS=$(echo "$RES" | jq '[.results[0] | has("score","incident_id","match_reason","resolution_status","fix_confirmed")] | all')
+[ "$HAS_FIELDS" = "true" ] \
+  && pass "Result fields OK (score, incident_id, match_reason, resolution_status, fix_confirmed)" \
+  || fail "Result missing fields — got: $(echo "$RES" | jq '.results[0] | keys')"
 
-HAS_TRIAGE=$(echo $RES | jq '.triage_brief != null')
+HAS_TRIAGE=$(echo "$RES" | jq '.triage_brief != null')
 [ "$HAS_TRIAGE" = "true" ] \
   && pass "Triage brief generated" \
-  || pass "Triage brief skipped (ANTHROPIC_API_KEY tidak di-set — OK)"
+  || pass "Triage brief skipped (no ANTHROPIC_API_KEY — OK)"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "connection timeout", "top_k": 5, "severity": "critical"}')
-COUNT=$(echo $RES | jq '.count // 0')
-pass "Search + severity=critical filter → $COUNT results"
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"connection timeout","top_k":5,"severity":"critical"}')
+pass "Search + severity=critical → $(echo "$RES" | jq '.count // 0') results"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "kafka consumer lag", "top_k": 5, "service": "analytics-service"}')
-COUNT=$(echo $RES | jq '.count // 0')
-pass "Search + service filter → $COUNT results"
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"kafka consumer lag","top_k":5,"service":"analytics-service"}')
+pass "Search + service filter → $(echo "$RES" | jq '.count // 0') results"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "gRPC deadline exceeded ML service not responding", "top_k": 3}')
-COUNT=$(echo $RES | jq '.count // 0')
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"gRPC deadline exceeded ML service not responding","top_k":3}')
+COUNT=$(echo "$RES" | jq '.count // 0')
 [ "$COUNT" -gt 0 ] && pass "Search gRPC cluster → $COUNT results" || fail "Search gRPC cluster → 0 results"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "analytics worker OOMKilled pod keeps restarting", "top_k": 3}')
-COUNT=$(echo $RES | jq '.count // 0')
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"analytics worker OOMKilled pod keeps restarting","top_k":3}')
+COUNT=$(echo "$RES" | jq '.count // 0')
 [ "$COUNT" -gt 0 ] && pass "Search OOM cluster → $COUNT results" || fail "Search OOM cluster → 0 results"
 
-# ── 5. Resolution Tracking ───────────────────────────────────────────────────
-section "5. Resolution Tracking (Hari 4)"
+# ── 5. Date & Tag Filters ─────────────────────────────────────────────────────
+section "5. Date & Tag Filters"
 
-RES=$(curl -s -w "\n%{http_code}" -X PATCH $BASE/incidents/INC-001/resolve \
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"connection pool exhausted","top_k":5,"date_from":"2024-01-01"}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ "$COUNT" -gt 0 ] && pass "date_from=2024-01-01 → $COUNT results" || fail "date_from → 0 results (expected >0)"
+
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"timeout","top_k":5,"date_to":"2026-12-31"}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ "$COUNT" -gt 0 ] && pass "date_to=2026-12-31 → $COUNT results" || fail "date_to → 0 results (expected >0)"
+
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"timeout","top_k":5,"date_from":"2099-01-01","date_to":"2099-12-31"}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ "$COUNT" -eq 0 ] && pass "date range far future → 0 results" || fail "date range far future → $COUNT (expected 0)"
+
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"connection pool","top_k":5,"tags":["hikari"]}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ $? -eq 0 ] && pass "tags=[hikari] filter → $COUNT results" || fail "tags filter → error"
+
+expect_status "date_from invalid format → 422" POST "$BASE/search" \
+  '{"query":"test","date_from":"01-01-2024"}' "422"
+
+# ── 6. Resolution Tracking ────────────────────────────────────────────────────
+section "6. Resolution Tracking"
+
+RES=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE/incidents/INC-001/resolve" \
   -H "Content-Type: application/json" \
-  -d '{"resolution_status": "resolved", "resolved_by": "test-runner"}')
+  -d '{"resolution_status":"resolved","resolved_by":"test-runner"}')
 STATUS=$(echo "$RES" | tail -1)
-BODY=$(echo "$RES" | head -1)
-STATUS_FIELD=$(echo "$BODY" | jq -r '.resolution_status // "error"' 2>/dev/null)
+STATUS_FIELD=$(echo "$RES" | head -1 | jq -r '.resolution_status // ""')
 [ "$STATUS" = "200" ] && [ "$STATUS_FIELD" = "resolved" ] \
-  && pass "PATCH /incidents/INC-001/resolve → resolved" \
-  || fail "PATCH resolve → HTTP $STATUS | $BODY"
+  && pass "PATCH INC-001 → resolved" \
+  || fail "PATCH INC-001 resolve → HTTP $STATUS"
 
-RES=$(curl -s -w "\n%{http_code}" -X PATCH $BASE/incidents/INC-001/resolve \
+RES=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE/incidents/INC-001/resolve" \
   -H "Content-Type: application/json" \
-  -d '{"resolution_status": "confirmed", "confirmed_fix": "Increased HikariCP pool size to 30, added connection timeout=5000", "resolved_by": "platform-team"}')
+  -d '{"resolution_status":"confirmed","confirmed_fix":"Increased HikariCP pool to 30","resolved_by":"platform-team"}')
 STATUS=$(echo "$RES" | tail -1)
-BODY=$(echo "$RES" | head -1)
-STATUS_FIELD=$(echo "$BODY" | jq -r '.resolution_status // "error"' 2>/dev/null)
+STATUS_FIELD=$(echo "$RES" | head -1 | jq -r '.resolution_status // ""')
 [ "$STATUS" = "200" ] && [ "$STATUS_FIELD" = "confirmed" ] \
-  && pass "PATCH /incidents/INC-001/resolve → confirmed" \
-  || fail "PATCH confirm → HTTP $STATUS | $BODY"
+  && pass "PATCH INC-001 → confirmed" \
+  || fail "PATCH INC-001 confirm → HTTP $STATUS"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH $BASE/incidents/INC-NONEXISTENT/resolve \
+expect_status "PATCH INC-NONEXISTENT → 404" PATCH "$BASE/incidents/INC-NONEXISTENT/resolve" \
+  '{"resolution_status":"resolved"}' "404"
+
+# seed TEST-001 resolution for analytics
+curl -s -X PATCH "$BASE/incidents/TEST-001/resolve" \
   -H "Content-Type: application/json" \
-  -d '{"resolution_status": "resolved"}')
-[ "$STATUS" = "404" ] && pass "PATCH INC-NONEXISTENT → 404 (expected)" || fail "PATCH nonexistent → $STATUS (expected 404)"
+  -d '{"resolution_status":"confirmed","confirmed_fix":"Test fix","resolved_by":"test-runner"}' > /dev/null
 
-# Resolve TEST-001 biar analytics ada datanya
-curl -s -X PATCH $BASE/incidents/TEST-001/resolve \
-  -H "Content-Type: application/json" \
-  -d '{"resolution_status": "confirmed", "confirmed_fix": "Test fix confirmed", "resolved_by": "test-runner"}' > /dev/null
+expect_status "GET /analytics/resolutions" GET "$BASE/analytics/resolutions" "" "200"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE/analytics/resolutions)
-[ "$STATUS" = "200" ] && pass "GET /analytics/resolutions → 200" || fail "GET /analytics/resolutions → $STATUS"
-
-RES=$(curl -s $BASE/analytics/resolutions)
-CONFIRMED=$(echo $RES | jq '.confirmed_count // 0')
+RES=$(curl -s "$BASE/analytics/resolutions")
+CONFIRMED=$(echo "$RES" | jq '.confirmed_count // 0')
 [ "$CONFIRMED" -gt 0 ] \
-  && pass "Resolutions: $CONFIRMED confirmed fix(es) found" \
-  || fail "Resolutions: confirmed_count=0 — PATCH mungkin masih gagal"
-info "Resolutions: resolved=$(echo $RES | jq '.resolved_count') confirmed=$(echo $RES | jq '.confirmed_count')"
+  && pass "Resolutions: $CONFIRMED confirmed fix(es)" \
+  || fail "Resolutions: confirmed_count=0"
+info "resolved=$(echo "$RES" | jq '.resolved_count') confirmed=$(echo "$RES" | jq '.confirmed_count')"
 
-RES=$(curl -s -X POST $BASE/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "hikari pool exhausted", "top_k": 3}')
-FIX_CONFIRMED=$(echo $RES | jq '[.results[] | select(.incident_id == "INC-001") | .fix_confirmed] | first // false')
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"hikari pool exhausted","top_k":3}')
+FIX_CONFIRMED=$(echo "$RES" | jq '[.results[] | select(.incident_id=="INC-001") | .fix_confirmed] | first // false')
 [ "$FIX_CONFIRMED" = "true" ] \
-  && pass "Search result INC-001: fix_confirmed=true setelah di-resolve" \
-  || pass "fix_confirmed check skipped (INC-001 tidak di top 3 — OK)"
+  && pass "INC-001 fix_confirmed=true in search results" \
+  || pass "fix_confirmed check skipped (INC-001 not in top 3 — OK)"
 
-# ── 6. Analytics: Recurring ─────────────────────────────────────────────────
-section "6. Analytics: Recurring Failures (Hari 3)"
+# ── 7. Analytics: Recurring ───────────────────────────────────────────────────
+section "7. Analytics: Recurring"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" $BASE/analytics/recurring)
-[ "$STATUS" = "200" ] && pass "GET /analytics/recurring → 200" || fail "GET /analytics/recurring → $STATUS"
+expect_status "GET /analytics/recurring" GET "$BASE/analytics/recurring" "" "200"
 
-RES=$(curl -s $BASE/analytics/recurring)
-PATTERNS=$(echo $RES | jq '.patterns | length')
-TOTAL=$(echo $RES | jq '.total_incidents')
-[ "$PATTERNS" -gt 0 ] && pass "Recurring: $PATTERNS patterns dari $TOTAL incidents" || fail "Recurring: 0 patterns"
-info "Top pattern: $(echo $RES | jq -r '.patterns[0] | "\(.failure_mode) (\(.count) incidents)"')"
+RES=$(curl -s "$BASE/analytics/recurring")
+PATTERNS=$(echo "$RES" | jq '.patterns | length')
+TOTAL=$(echo "$RES" | jq '.total_incidents')
+[ "$PATTERNS" -gt 0 ] \
+  && pass "$PATTERNS patterns from $TOTAL incidents" \
+  || fail "0 patterns found"
+info "top: $(echo "$RES" | jq -r '.patterns[0] | "\(.failure_mode) (\(.count))"')"
 
 RES=$(curl -s "$BASE/analytics/recurring?top_k=3")
-PATTERNS=$(echo $RES | jq '.patterns | length')
-[ "$PATTERNS" -le 3 ] && pass "Recurring top_k=3 → $PATTERNS patterns (≤3)" || fail "Recurring top_k=3 → $PATTERNS (expected ≤3)"
+PATTERNS=$(echo "$RES" | jq '.patterns | length')
+[ "$PATTERNS" -le 3 ] \
+  && pass "top_k=3 → $PATTERNS patterns" \
+  || fail "top_k=3 → $PATTERNS (expected ≤3)"
 
-# ── 7. Webhook: PagerDuty ────────────────────────────────────────────────────
-section "7. Webhook: PagerDuty (Hari 1-2)"
+# ── 8. Analytics: Dashboard ───────────────────────────────────────────────────
+section "8. Analytics: Dashboard"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/webhooks/pagerduty \
-  -H "Content-Type: application/json" \
-  -d '{"event":{"event_type":"incident.triggered","data":{"id":"WEBHOOK-TEST-001","title":"Payment service 504","severity":"high","service":{"name":"payment-service"},"body":{"details":"Upstream timeout"}}}}')
-[ "$STATUS" = "200" ] && pass "POST /webhooks/pagerduty V3 → 200" || fail "POST /webhooks/pagerduty V3 → $STATUS"
+RES=$(curl -s -w "\n%{http_code}" "$BASE/analytics/dashboard")
+STATUS=$(echo "$RES" | tail -1)
+BODY=$(echo "$RES" | head -1)
+[ "$STATUS" = "200" ] && pass "GET /analytics/dashboard" || fail "GET /analytics/dashboard → $STATUS"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/webhooks/pagerduty \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"type":"incident.trigger","data":{"incident":{"id":"WEBHOOK-TEST-002","title":"DB pool exhausted","urgency":"high","service":{"name":"db-service"},"first_trigger_log_entry":{"channel":{"summary":"HikariPool timeout"}}}}}]}')
-[ "$STATUS" = "200" ] && pass "POST /webhooks/pagerduty V2 → 200" || fail "POST /webhooks/pagerduty V2 → $STATUS"
+MISSING=$(echo "$BODY" | jq -r '
+  ["total_incidents","by_severity","by_service","resolution_rate",
+   "open_count","resolved_count","confirmed_count","recent_incidents"]
+  | map(select(. as $k | input | has($k) | not))
+  | join(", ")
+' 2>/dev/null <<< "$BODY")
+[ -z "$MISSING" ] \
+  && pass "All required fields present" \
+  || fail "Missing fields: $MISSING"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/webhooks/pagerduty \
-  -H "Content-Type: application/json" \
-  -d '{"bad": "payload"}')
-[ "$STATUS" = "422" ] && pass "POST /webhooks/pagerduty bad payload → 422 (expected)" || fail "POST /webhooks/pagerduty bad payload → $STATUS (expected 422)"
+TOTAL=$(echo "$BODY" | jq '.total_incidents // 0')
+[ "$TOTAL" -gt 0 ] && pass "total_incidents=$TOTAL" || fail "total_incidents=0"
 
-# ── 8. Validation ────────────────────────────────────────────────────────────
-section "8. Input Validation"
+info "$(echo "$BODY" | jq -c '{total: .total_incidents, open: .open_count, resolved: .resolved_count, rate: .resolution_rate}')"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/index \
-  -H "Content-Type: application/json" \
-  -d '{"incidents": [{"title": "Test", "severity": "ultra-critical"}]')
-[ "$STATUS" = "422" ] && pass "Invalid severity → 422" || fail "Invalid severity → $STATUS (expected 422)"
+# ── 9. Webhook: PagerDuty ─────────────────────────────────────────────────────
+section "9. Webhook: PagerDuty"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/index \
-  -H "Content-Type: application/json" \
-  -d '{"incidents": [{"service": "test"}]')
-[ "$STATUS" = "422" ] && pass "Missing title → 422" || fail "Missing title → $STATUS (expected 422)"
+expect_status "V3 format" POST "$BASE/webhooks/pagerduty" \
+  '{"event":{"event_type":"incident.triggered","data":{"id":"WEBHOOK-TEST-001","title":"Payment service 504","severity":"high","service":{"name":"payment-service"},"body":{"details":"Upstream timeout"}}}}' \
+  "200"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST $BASE/index \
-  -H "Content-Type: application/json" \
-  -d '{"incidents": [{"title": "Test", "date": "11-04-2026"}]')
-[ "$STATUS" = "422" ] && pass "Invalid date format → 422" || fail "Invalid date format → $STATUS (expected 422)"
+expect_status "V2 format" POST "$BASE/webhooks/pagerduty" \
+  '{"messages":[{"type":"incident.trigger","data":{"incident":{"id":"WEBHOOK-TEST-002","title":"DB pool exhausted","urgency":"high","service":{"name":"db-service"}}}}]}' \
+  "200"
 
-STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH $BASE/incidents/INC-001/resolve \
-  -H "Content-Type: application/json" \
-  -d '{"resolution_status": "deleted"}')
-[ "$STATUS" = "422" ] && pass "Invalid resolution_status → 422" || fail "Invalid resolution_status → $STATUS (expected 422)"
+expect_status "bad payload → 422" POST "$BASE/webhooks/pagerduty" \
+  '{"bad":"payload"}' "422"
 
-# ── Summary ──────────────────────────────────────────────────────────────────
-echo -e "\n${YELLOW}━━ RESULT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# ── 10. Webhook: Slack ────────────────────────────────────────────────────────
+section "10. Webhook: Slack"
+
+expect_status "simple format (text+attachments)" POST "$BASE/webhooks/slack" \
+  '{"text":"CRITICAL: HikariPool exhausted","username":"payment-service","attachments":[{"title":"DB pool exhausted","text":"Connection not available after 30s","color":"danger"}]}' \
+  "200"
+
+expect_status "rich format (incident object)" POST "$BASE/webhooks/slack" \
+  '{"incident":{"title":"Kafka consumer lag spike","service":"order-service","severity":"high","error_message":"Consumer group lag exceeded 50000 messages"}}' \
+  "200"
+
+expect_status "bad payload → 422" POST "$BASE/webhooks/slack" \
+  '{"bad":"payload"}' "422"
+
+# ── 11. Input Validation ──────────────────────────────────────────────────────
+section "11. Input Validation"
+
+expect_status "invalid severity → 422" POST "$BASE/index" \
+  '{"incidents":[{"title":"Test","severity":"ultra-critical"}]}' "422"
+
+expect_status "missing title → 422" POST "$BASE/index" \
+  '{"incidents":[{"service":"test"}]}' "422"
+
+expect_status "invalid date format → 422" POST "$BASE/index" \
+  '{"incidents":[{"title":"Test","date":"11-04-2026"}]}' "422"
+
+expect_status "invalid resolution_status → 422" PATCH "$BASE/incidents/INC-001/resolve" \
+  '{"resolution_status":"deleted"}' "422"
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+ELAPSED=$(( $(date +%s) - START ))
 TOTAL_TESTS=$((PASS + FAIL))
-echo -e "  Total  : $TOTAL_TESTS tests"
-echo -e "  ${GREEN}Pass   : $PASS${NC}"
+
+echo -e "\n${Y}  ────────────────────────────────────────────────────${NC}"
+printf "  Tests   %d  |  ${G}Pass  %d${NC}  |  " "$TOTAL_TESTS" "$PASS"
 [ "$FAIL" -gt 0 ] \
-  && echo -e "  ${RED}Fail   : $FAIL${NC}" \
-  || echo -e "  Fail   : $FAIL"
-echo ""
+  && printf "${R}Fail  %d${NC}" "$FAIL" \
+  || printf "Fail  %d" "$FAIL"
+printf "  |  ${D}%ds${NC}\n\n" "$ELAPSED"
+
 [ "$FAIL" -eq 0 ] \
-  && echo -e "  ${GREEN}🎉 All tests passed!${NC}" \
-  || echo -e "  ${RED}⚠️  $FAIL test(s) failed — cek log di atas${NC}"
-echo ""
+  && echo -e "  ${G}✓ All $TOTAL_TESTS tests passed${NC}\n" \
+  || echo -e "  ${R}✗ $FAIL of $TOTAL_TESTS failed — cek log di atas${NC}\n"

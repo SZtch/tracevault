@@ -448,12 +448,17 @@ def search_incidents(
     top_k: int = 5,
     severity: Optional[str] = None,
     service: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     with get_client() as client:
         if not client.collections.exists(COLLECTION):
             return []
 
         qv = embed(query)
+        # Fetch extra candidates when post-filtering by date/tags
+        fetch_limit = top_k * 4 if (date_from or date_to or tags) else top_k
 
         if severity or service:
             fb = FilterBuilder()
@@ -463,19 +468,30 @@ def search_incidents(
                 fb = fb.must(Field("service").eq(service))
             results = client.points.search(
                 COLLECTION, vector=qv, filter=fb.build(),
-                limit=top_k, with_payload=True,
+                limit=fetch_limit, with_payload=True,
             )
         else:
             results = client.points.search(
                 COLLECTION, vector=qv,
-                limit=top_k, with_payload=True,
+                limit=fetch_limit, with_payload=True,
             )
 
         out = []
         for r in results:
+            # ── Python-side date filter ──────────────────────────────────
+            inc_date = r.payload.get("date") or ""
+            if date_from and inc_date and inc_date < date_from:
+                continue
+            if date_to and inc_date and inc_date > date_to:
+                continue
+
+            # ── Python-side tags filter ──────────────────────────────────
+            if tags:
+                stored = [t.strip().lower() for t in (r.payload.get("tags") or "").split(",") if t.strip()]
+                if not any(t.lower() in stored for t in tags):
+                    continue
+
             explanation = build_match_reason(query, r.payload)
-            # confirmed_fix overrides the original fix when present —
-            # it's the engineer-verified solution, so it's more trustworthy.
             confirmed_fix = r.payload.get("confirmed_fix") or None
             out.append({
                 "id":            r.id,
@@ -502,6 +518,8 @@ def search_incidents(
                 "context_hints":  explanation["context_hints"],
                 "match_signals":  explanation["match_signals"],
             })
+            if len(out) >= top_k:
+                break
         return out
 
 
