@@ -52,6 +52,8 @@ services:
       FRONTEND_URL: "${FRONTEND_URL:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
+      #Slack
+      SLACK_WEBHOOK_URL: "${SLACK_WEBHOOK_URL:-}"
       # Ollama -- optional, for fully offline triage briefs
       OLLAMA_URL: "${OLLAMA_URL:-}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3}"

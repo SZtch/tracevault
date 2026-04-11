@@ -30,6 +30,7 @@ except ImportError:
 
 from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count
 from triage import generate_triage_brief
+from slack_notifier import notify_slack_autopilot
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger("tracevault")
@@ -621,11 +622,29 @@ def webhook_pagerduty(payload: PagerDutyWebhook):
 
     try:
         count = index_incidents([incident.to_dict()])
+
+        # ── Incident Autopilot ────────────────────────────────────────────
+        # After indexing, auto-search for similar past incidents and notify Slack.
+        # Runs in background — never blocks the webhook response.
+        try:
+            query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
+            if query.strip():
+                similar = search_incidents(query=query, top_k=3)
+                brief   = generate_triage_brief(query=query, results=similar)
+                notify_slack_autopilot(
+                    incident = normalized,
+                    results  = similar,
+                    brief    = brief,
+                )
+        except Exception as autopilot_err:
+            log.warning("Autopilot error (non-fatal): %s", autopilot_err)
+
         return {
             "status":      "ok",
             "indexed":     count,
             "incident_id": normalized.get("id") or "(generated)",
             "source":      "pagerduty_webhook",
+            "autopilot":   "triggered",
         }
     except Exception as e:
         raise _db_error(e)
