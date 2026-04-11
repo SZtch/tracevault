@@ -529,9 +529,12 @@ def search_incidents(
         for r in results:
             # ── Python-side date filter ──────────────────────────────────
             inc_date = r.payload.get("date") or ""
-            if date_from and inc_date and inc_date < date_from:
+            if date_from or date_to:
+                if not inc_date:
+                    continue
+            if date_from and inc_date < date_from:
                 continue
-            if date_to and inc_date and inc_date > date_to:
+            if date_to and inc_date > date_to:
                 continue
 
             # ── Python-side tags filter ──────────────────────────────────

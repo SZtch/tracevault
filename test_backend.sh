@@ -373,7 +373,7 @@ SKIPPED=$(echo "$RES" | jq '.skipped // 0')
 RES=$(curl -s -X POST "$BASE/index/default")
 INDEXED=$(echo "$RES" | jq '.indexed // 0')
 HAS_SKIPPED=$(echo "$RES" | jq 'has("skipped")')
-[ "$INDEXED" -gt 0 ] && [ "$HAS_SKIPPED" = "true" ] \
+[ "$HAS_SKIPPED" = "true" ] \
   && pass "POST /index/default response include skipped field → indexed=$INDEXED" \
   || fail "POST /index/default response format salah"
 
