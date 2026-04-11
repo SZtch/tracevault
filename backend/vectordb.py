@@ -669,7 +669,7 @@ def get_all_incidents() -> List[Dict[str, Any]]:
                 offset = next_offset
             return incidents
     except Exception as e:
-        log.error("get_all_incidents error: %s", e)
+        _log.error("get_all_incidents error: %s", e)
         return []
 
 
