@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -31,6 +31,24 @@ except ImportError:
 from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents, update_incident_resolution, get_resolved_incidents, delete_incident, update_incident_fields
 from triage import generate_triage_brief
 from slack_notifier import notify_slack_autopilot
+
+
+# ── Autopilot helper ──────────────────────────────────────────────────────────
+# Shared by both webhook endpoints. Runs in a FastAPI BackgroundTask so the
+# webhook caller receives 200 immediately — Anthropic + Slack latency never
+# blocks the response.
+
+def _run_autopilot(normalized: dict) -> None:
+    """Search for similar incidents, generate triage brief, and notify Slack."""
+    try:
+        query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
+        if not query.strip():
+            return
+        similar = search_incidents(query=query, top_k=3)
+        brief   = generate_triage_brief(query=query, results=similar)
+        notify_slack_autopilot(incident=normalized, results=similar, brief=brief)
+    except Exception as e:
+        log.warning("Autopilot error (non-fatal): %s", e)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger("tracevault")
@@ -379,6 +397,11 @@ async def index_from_file(file: UploadFile = File(...)):
     """
     try:
         content = await file.read()
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(
+                status_code=413,
+                detail="File too large — maximum upload size is 10 MB",
+            )
         raw = json.loads(content)
     except json.JSONDecodeError as exc:
         raise HTTPException(
@@ -445,7 +468,7 @@ def index_default():
         )
 
     try:
-        result = index_incidents(_to_dicts(incidents))
+        result = index_incidents(_to_dicts(incidents), skip_duplicates=True)
         return {"indexed": result["indexed"], "skipped": result["skipped"], "duplicate_ids": result["duplicate_ids"], "source": "sample_dataset", "status": "ok"}
     except Exception as e:
         raise _db_error(e)
@@ -732,11 +755,13 @@ class UpdateIncidentRequest(BaseModel):
         raise ValueError("tags must be a list of strings or comma-separated string")
 
     def to_update_dict(self) -> Dict[str, Any]:
-        """Return only explicitly set fields (exclude unset/None)."""
-        return {
-            k: v for k, v in self.model_dump().items()
-            if v is not None
-        }
+        """Return only explicitly provided fields.
+
+        Uses model_fields_set (Pydantic v2) instead of filtering by None so
+        that a caller can intentionally clear a field by sending an empty
+        string or empty list — omitted fields are simply not included.
+        """
+        return {k: v for k, v in self.model_dump().items() if k in self.model_fields_set}
 
 
 @app.patch("/incidents/{incident_id}")
@@ -1021,7 +1046,7 @@ def _normalize_slack(payload: SlackWebhook) -> Dict[str, Any]:
 
 
 @app.post("/webhooks/slack")
-def webhook_slack(payload: SlackWebhook):
+def webhook_slack(payload: SlackWebhook, background_tasks: BackgroundTasks):
     """
     Ingest a Slack alert webhook and index it into VectorAI DB.
 
@@ -1064,16 +1089,7 @@ def webhook_slack(payload: SlackWebhook):
 
     try:
         result = index_incidents([incident.to_dict()], skip_duplicates=True)
-
-        try:
-            query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
-            if query.strip():
-                similar = search_incidents(query=query, top_k=3)
-                brief   = generate_triage_brief(query=query, results=similar)
-                notify_slack_autopilot(incident=normalized, results=similar, brief=brief)
-        except Exception as autopilot_err:
-            log.warning("Autopilot error (non-fatal): %s", autopilot_err)
-
+        background_tasks.add_task(_run_autopilot, normalized)
         return {
             "status":      "ok",
             "indexed":     result["indexed"],
@@ -1225,7 +1241,7 @@ def _normalize_pd(payload: PagerDutyWebhook) -> Dict[str, Any]:
 
 
 @app.post("/webhooks/pagerduty")
-def webhook_pagerduty(payload: PagerDutyWebhook):
+def webhook_pagerduty(payload: PagerDutyWebhook, background_tasks: BackgroundTasks):
     """
     Ingest a PagerDuty webhook and index it into VectorAI DB.
     Auto-detects V2 and V3 webhook formats.
@@ -1253,6 +1269,19 @@ def webhook_pagerduty(payload: PagerDutyWebhook):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Payload normalization failed: {e}")
 
+    # Guard against payloads that parsed correctly but contained no usable data
+    # (e.g. event={} or messages=[]) — avoids silently indexing empty incidents.
+    _FALLBACK_TITLE = "Untitled PagerDuty incident"
+    if (
+        normalized.get("title") == _FALLBACK_TITLE
+        and not normalized.get("id")
+        and not normalized.get("error_message")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="PagerDuty payload contained no usable incident data — check 'event.data' (V3) or 'messages[0].data.incident' (V2)",
+        )
+
     try:
         incident = IncidentInput(**normalized)
     except Exception as exc:
@@ -1266,23 +1295,7 @@ def webhook_pagerduty(payload: PagerDutyWebhook):
 
     try:
         result = index_incidents([incident.to_dict()], skip_duplicates=True)
-
-        # ── Incident Autopilot ────────────────────────────────────────────
-        # After indexing, auto-search for similar past incidents and notify Slack.
-        # Runs in background — never blocks the webhook response.
-        try:
-            query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
-            if query.strip():
-                similar = search_incidents(query=query, top_k=3)
-                brief   = generate_triage_brief(query=query, results=similar)
-                notify_slack_autopilot(
-                    incident = normalized,
-                    results  = similar,
-                    brief    = brief,
-                )
-        except Exception as autopilot_err:
-            log.warning("Autopilot error (non-fatal): %s", autopilot_err)
-
+        background_tasks.add_task(_run_autopilot, normalized)
         return {
             "status":      "ok",
             "indexed":     result["indexed"],

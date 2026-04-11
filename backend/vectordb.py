@@ -6,8 +6,11 @@ Uses actian_vectorai SDK (b2 API)
 import os
 import re
 import hashlib
+import logging
 import numpy as np
 from typing import List, Dict, Any, Optional
+
+_log = logging.getLogger("tracevault.vectordb")
 
 try:
     from actian_vectorai import (
@@ -694,8 +697,6 @@ def get_incident_count() -> int:
         return 0
 
 
-import logging as _logging
-_log = _logging.getLogger("tracevault.vectordb")
 
 
 def update_incident_resolution(

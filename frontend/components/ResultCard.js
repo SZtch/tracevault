@@ -189,12 +189,29 @@ export default function ResultCard({ result, rank }) {
       {result.fix && (
         <>
           <Divider />
-          <SectionLabel icon={WrenchIcon}>Fix Applied</SectionLabel>
+          <div className="flex items-center gap-2 mb-1.5">
+            <WrenchIcon className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--text-dim)' }} />
+            <span className="font-mono text-[9px] font-semibold tracking-widest uppercase" style={{ color: 'var(--text-dim)' }}>
+              Fix Applied
+            </span>
+            {result.fix_confirmed && (
+              <span
+                className="font-mono text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 rounded"
+                style={{
+                  background:  'var(--accent-dim)',
+                  border:      '1px solid var(--accent-mid)',
+                  color:       'var(--accent)',
+                }}
+              >
+                ✓ confirmed
+              </span>
+            )}
+          </div>
           <div
             className="text-[13px] leading-relaxed rounded-md px-3 py-2.5"
             style={{
-              background:  'rgba(0,200,160,0.05)',
-              border:      '1px solid rgba(0,200,160,0.14)',
+              background:  result.fix_confirmed ? 'rgba(0,200,160,0.08)' : 'rgba(0,200,160,0.05)',
+              border:      result.fix_confirmed ? '1px solid rgba(0,200,160,0.28)' : '1px solid rgba(0,200,160,0.14)',
               color:       'var(--text)',
             }}
           >
@@ -258,8 +275,8 @@ export default function ResultCard({ result, rank }) {
         </>
       )}
 
-      {/* ── Footer: tags + date ── */}
-      {(result.tags?.filter(Boolean).length > 0 || result.date) && (
+      {/* ── Footer: tags + date + resolution status ── */}
+      {(result.tags?.filter(Boolean).length > 0 || result.date || result.resolution_status) && (
         <>
           <Divider />
           <div className="flex items-center gap-2 flex-wrap">
@@ -277,6 +294,19 @@ export default function ResultCard({ result, rank }) {
                 #{tag}
               </span>
             ))}
+            {result.resolution_status && result.resolution_status !== 'open' && (
+              <span
+                className="font-mono text-[9px] px-2 py-0.5 rounded"
+                style={{
+                  background:  result.resolution_status === 'confirmed' ? 'rgba(64,144,208,0.10)' : 'var(--accent-dim)',
+                  border:      result.resolution_status === 'confirmed' ? '1px solid rgba(64,144,208,0.25)' : '1px solid var(--accent-mid)',
+                  color:       result.resolution_status === 'confirmed' ? '#4090d0' : 'var(--accent)',
+                }}
+              >
+                {result.resolution_status}
+                {result.resolved_by ? ` · ${result.resolved_by}` : ''}
+              </span>
+            )}
             {result.date && (
               <span
                 className="font-mono text-[10px] ml-auto"
