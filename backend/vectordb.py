@@ -398,49 +398,95 @@ def init_collection(client, recreate: bool = False):
         print(f"✅ Collection '{COLLECTION}' created (dim={DIM})")
 
 
-def index_incidents(incidents: List[Dict[str, Any]]) -> int:
+def _get_existing_incident_ids(client) -> set:
+    """Return the set of all incident_id strings currently in the collection."""
+    existing = set()
+    offset = None
+    while True:
+        batch, next_offset = client.points.scroll(
+            COLLECTION, limit=100, offset=offset, with_payload=True,
+        )
+        for pt in batch:
+            inc_id = pt.payload.get("incident_id")
+            if inc_id and inc_id != "UNKNOWN":
+                existing.add(inc_id)
+        if next_offset is None:
+            break
+        offset = next_offset
+    return existing
+
+
+def index_incidents(
+    incidents: List[Dict[str, Any]],
+    skip_duplicates: bool = False,
+) -> Dict[str, Any]:
+    """
+    Index incidents into VectorAI DB.
+
+    skip_duplicates (default False):
+      False — upsert all. Same incident_id overwrites existing (safe for re-index).
+      True  — skip incidents whose incident_id already exists. Incidents without
+              an ID are always indexed (no dedup key available).
+
+    Returns:
+      {"indexed": int, "skipped": int, "duplicate_ids": List[str]}
+    """
     with get_client() as client:
         init_collection(client)
-        points = []
+
+        existing_ids: set = set()
+        if skip_duplicates:
+            existing_ids = _get_existing_incident_ids(client)
+
+        points      = []
+        skipped_ids = []
+
         for inc in incidents:
             incident_id = inc.get("id", "")
 
-            # ── Extract structured signals before building retrieval text ───
+            if skip_duplicates and incident_id and incident_id in existing_ids:
+                skipped_ids.append(incident_id)
+                _log.info("Dedup: skipping already-indexed %r", incident_id)
+                continue
+
             exception_class    = _extract_exception_class(inc.get("stack_trace", ""))
             stack_methods      = _extract_stack_methods(inc.get("stack_trace", ""))
             stack_methods_text = " ".join(stack_methods)
+            retrieval_text     = build_searchable_text(inc, exception_class=exception_class)
 
-            retrieval_text = build_searchable_text(inc, exception_class=exception_class)
-
-            point_id = (
-                stable_id(incident_id) if incident_id
-                else abs(hash(retrieval_text)) % (2 ** 31)
-            )
+            # stable_id on retrieval_text for no-ID incidents — consistent across runs
+            id_source = incident_id if incident_id else retrieval_text
+            point_id  = stable_id(id_source)
 
             points.append(PointStruct(
                 id=point_id,
                 vector=embed(retrieval_text),
                 payload={
-                    # ── Display fields (shown to user) ──────────────────
-                    "incident_id":    incident_id or "UNKNOWN",
-                    "title":          inc.get("title", ""),
-                    "error_message":  inc.get("error_message", ""),
-                    "root_cause":     inc.get("root_cause", ""),
-                    "fix":            inc.get("fix", ""),
-                    "service":        inc.get("service", "unknown"),
-                    "severity":       inc.get("severity", "medium"),
-                    "date":           inc.get("date", ""),
-                    "tags":           ",".join(inc.get("tags", [])),
-                    # ── Explanation fields (used by build_match_reason) ──
-                    "exception_class":    exception_class,
+                    "incident_id":       incident_id or "UNKNOWN",
+                    "title":             inc.get("title", ""),
+                    "error_message":     inc.get("error_message", ""),
+                    "root_cause":        inc.get("root_cause", ""),
+                    "fix":               inc.get("fix", ""),
+                    "service":           inc.get("service", "unknown"),
+                    "severity":          inc.get("severity", "medium"),
+                    "date":              inc.get("date", ""),
+                    "tags":              ",".join(inc.get("tags", [])),
+                    "exception_class":   exception_class,
                     "stack_methods_text": stack_methods_text,
-                    # ── Debug / introspection ───────────────────────────
-                    "retrieval_text": retrieval_text,
+                    "retrieval_text":    retrieval_text,
                 },
             ))
-        client.points.upsert(COLLECTION, points)
-        print(f"✅ Indexed {len(points)} incidents into '{COLLECTION}'")
-        return len(points)
+
+        if points:
+            client.points.upsert(COLLECTION, points)
+
+        result = {
+            "indexed":       len(points),
+            "skipped":       len(skipped_ids),
+            "duplicate_ids": skipped_ids,
+        }
+        print(f"✅ Indexed {result['indexed']} incidents, skipped {result['skipped']} duplicates")
+        return result
 
 
 def search_incidents(
@@ -712,6 +758,138 @@ def update_incident_resolution(
             payload=payload,
         )])
         _log.info("Resolution updated: %s → %s", incident_id, resolution_status)
+        return True
+
+
+def delete_incident(incident_id: str) -> bool:
+    """
+    Delete an incident from the collection by its string incident_id.
+
+    Scrolls to find the internal integer point ID, then deletes by that ID.
+    Returns True if found and deleted, False if not found.
+    """
+    with get_client() as client:
+        if not client.collections.exists(COLLECTION):
+            return False
+
+        found_point = None
+        offset = None
+        while True:
+            batch, next_offset = client.points.scroll(
+                COLLECTION,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+            )
+            for pt in batch:
+                if pt.payload.get("incident_id") == incident_id:
+                    found_point = pt
+                    break
+            if found_point or next_offset is None:
+                break
+            offset = next_offset
+
+        if not found_point:
+            _log.warning("delete_incident: incident_id %r not found", incident_id)
+            return False
+
+        client.points.delete_by_ids(COLLECTION, [found_point.id])
+        _log.info("Deleted incident: %s (point_id=%s)", incident_id, found_point.id)
+        return True
+
+
+def update_incident_fields(
+    incident_id: str,
+    fields: Dict[str, Any],
+) -> bool:
+    """
+    Update editable fields on an existing incident and re-embed.
+
+    Editable fields: title, service, component, severity, date,
+                     error_message, root_cause, fix, stack_trace, tags.
+
+    The vector is re-embedded from scratch using the updated retrieval text
+    so search results stay accurate after the update.
+
+    Returns True if found and updated, False if incident_id not found.
+    """
+    with get_client() as client:
+        if not client.collections.exists(COLLECTION):
+            return False
+
+        found_point = None
+        offset = None
+        while True:
+            batch, next_offset = client.points.scroll(
+                COLLECTION,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+            )
+            for pt in batch:
+                if pt.payload.get("incident_id") == incident_id:
+                    found_point = pt
+                    break
+            if found_point or next_offset is None:
+                break
+            offset = next_offset
+
+        if not found_point:
+            _log.warning("update_incident_fields: incident_id %r not found", incident_id)
+            return False
+
+        payload = dict(found_point.payload)
+
+        # ── Apply field updates ───────────────────────────────────────────────
+        _EDITABLE = {
+            "title", "service", "component", "severity",
+            "date", "error_message", "root_cause", "fix",
+            "stack_trace", "tags",
+        }
+        for key, value in fields.items():
+            if key not in _EDITABLE:
+                continue
+            if key == "tags":
+                # Normalize tags to comma-joined string (internal storage format)
+                if isinstance(value, list):
+                    payload["tags"] = ",".join(str(t).strip() for t in value if str(t).strip())
+                else:
+                    payload["tags"] = str(value)
+            elif value is None:
+                payload[key] = ""
+            else:
+                payload[key] = str(value).strip()
+
+        # ── Re-extract stack signals if stack_trace changed ───────────────────
+        stack_trace = payload.get("stack_trace") or ""
+        exception_class    = _extract_exception_class(stack_trace)
+        stack_methods      = _extract_stack_methods(stack_trace)
+        stack_methods_text = " ".join(stack_methods)
+        payload["exception_class"]    = exception_class
+        payload["stack_methods_text"] = stack_methods_text
+
+        # ── Re-build retrieval text and re-embed ──────────────────────────────
+        # Reconstruct the incident dict from updated payload for build_searchable_text
+        inc_snapshot = {
+            "title":         payload.get("title", ""),
+            "error_message": payload.get("error_message", ""),
+            "service":       payload.get("service", ""),
+            "tags":          [t.strip() for t in payload.get("tags", "").split(",") if t.strip()],
+            "root_cause":    payload.get("root_cause", ""),
+            "stack_trace":   payload.get("stack_trace", ""),
+        }
+        retrieval_text          = build_searchable_text(inc_snapshot, exception_class=exception_class)
+        payload["retrieval_text"] = retrieval_text
+
+        from datetime import datetime, timezone
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        client.points.upsert(COLLECTION, [PointStruct(
+            id=found_point.id,
+            vector=embed(retrieval_text),
+            payload=payload,
+        )])
+        _log.info("Updated incident fields: %s → %s", incident_id, list(fields.keys()))
         return True
 
 

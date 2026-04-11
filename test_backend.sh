@@ -27,7 +27,6 @@ section() {
 }
 
 expect_status() {
-  # expect_status LABEL METHOD URL [body] EXPECTED_CODE
   local label="$1" method="$2" url="$3" body="$4" want="$5"
   local got
   if [ -n "$body" ]; then
@@ -76,6 +75,13 @@ STATUS=$(echo "$RES" | tail -1)
 [ "$STATUS" = "200" ] \
   && pass "POST /index (single incident)" \
   || fail "POST /index → $STATUS | $(echo "$RES" | head -1 | jq -c '.detail // .' 2>/dev/null)"
+
+# Verify dedup fields present in response
+BODY=$(echo "$RES" | head -1)
+HAS_DEDUP=$(echo "$BODY" | jq 'has("skipped") and has("duplicate_ids")')
+[ "$HAS_DEDUP" = "true" ] \
+  && pass "POST /index response includes skipped + duplicate_ids fields" \
+  || fail "POST /index response missing dedup fields"
 
 expect_status "POST /index/default" POST "$BASE/index/default" "" "200"
 
@@ -165,7 +171,6 @@ STATUS_FIELD=$(echo "$RES" | head -1 | jq -r '.resolution_status // ""')
 expect_status "PATCH INC-NONEXISTENT → 404" PATCH "$BASE/incidents/INC-NONEXISTENT/resolve" \
   '{"resolution_status":"resolved"}' "404"
 
-# seed TEST-001 resolution for analytics
 curl -s -X PATCH "$BASE/incidents/TEST-001/resolve" \
   -H "Content-Type: application/json" \
   -d '{"resolution_status":"confirmed","confirmed_fix":"Test fix","resolved_by":"test-runner"}' > /dev/null
@@ -225,7 +230,6 @@ MISSING=$(echo "$BODY" | jq -r '
 
 TOTAL=$(echo "$BODY" | jq '.total_incidents // 0')
 [ "$TOTAL" -gt 0 ] && pass "total_incidents=$TOTAL" || fail "total_incidents=0"
-
 info "$(echo "$BODY" | jq -c '{total: .total_incidents, open: .open_count, resolved: .resolved_count, rate: .resolution_rate}')"
 
 # ── 9. Webhook: PagerDuty ─────────────────────────────────────────────────────
@@ -270,6 +274,111 @@ expect_status "invalid date format → 422" POST "$BASE/index" \
 
 expect_status "invalid resolution_status → 422" PATCH "$BASE/incidents/INC-001/resolve" \
   '{"resolution_status":"deleted"}' "422"
+
+# ── 12. Delete Incident (feat 1) ──────────────────────────────────────────────
+section "12. Delete Incident"
+
+# Seed incident khusus untuk delete test
+curl -s -X POST "$BASE/index" \
+  -H "Content-Type: application/json" \
+  -d '{"incidents":[{"id":"DELETE-TEST-001","title":"Incident to be deleted","service":"test-service","severity":"low"}]}' > /dev/null
+
+RES=$(curl -s -w "\n%{http_code}" -X DELETE "$BASE/incidents/DELETE-TEST-001")
+STATUS=$(echo "$RES" | tail -1)
+DELETED=$(echo "$RES" | head -1 | jq -r '.deleted // false')
+[ "$STATUS" = "200" ] && [ "$DELETED" = "true" ] \
+  && pass "DELETE /incidents/DELETE-TEST-001 → deleted" \
+  || fail "DELETE incident → HTTP $STATUS"
+
+# Setelah dihapus, delete lagi harusnya 404
+expect_status "DELETE sudah dihapus → 404" DELETE "$BASE/incidents/DELETE-TEST-001" "" "404"
+
+# DELETE incident yang tidak ada
+expect_status "DELETE INC-NONEXISTENT → 404" DELETE "$BASE/incidents/INC-NONEXISTENT" "" "404"
+
+# ── 13. Update Incident Fields (feat 1) ───────────────────────────────────────
+section "13. Update Incident Fields"
+
+# Update root_cause dan fix
+RES=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE/incidents/INC-002" \
+  -H "Content-Type: application/json" \
+  -d '{"root_cause":"Updated root cause via PATCH","fix":"Updated fix via PATCH","tags":["connection-pool","updated"]}')
+STATUS=$(echo "$RES" | tail -1)
+FIELDS=$(echo "$RES" | head -1 | jq -r '.updated_fields // [] | join(",")')
+[ "$STATUS" = "200" ] \
+  && pass "PATCH /incidents/INC-002 → updated fields: $FIELDS" \
+  || fail "PATCH update fields → HTTP $STATUS"
+
+# Verify update tercermin di search
+RES=$(curl -s -X POST "$BASE/search" -H "Content-Type: application/json" \
+  -d '{"query":"Updated root cause via PATCH","top_k":3}')
+COUNT=$(echo "$RES" | jq '.count // 0')
+[ "$COUNT" -gt 0 ] \
+  && pass "Updated incident muncul di search setelah re-embed" \
+  || fail "Updated incident tidak muncul di search (re-embed gagal?)"
+
+# Update severity
+RES=$(curl -s -w "\n%{http_code}" -X PATCH "$BASE/incidents/INC-002" \
+  -H "Content-Type: application/json" \
+  -d '{"severity":"critical"}')
+STATUS=$(echo "$RES" | tail -1)
+[ "$STATUS" = "200" ] && pass "PATCH severity → 200" || fail "PATCH severity → $STATUS"
+
+# Update dengan severity invalid → 422
+expect_status "PATCH severity invalid → 422" PATCH "$BASE/incidents/INC-002" \
+  '{"severity":"ultra-critical"}' "422"
+
+# PATCH tanpa field → 422
+expect_status "PATCH tanpa field → 422" PATCH "$BASE/incidents/INC-002" \
+  '{}' "422"
+
+# PATCH incident tidak ada → 404
+expect_status "PATCH INC-NONEXISTENT → 404" PATCH "$BASE/incidents/INC-NONEXISTENT" \
+  '{"root_cause":"test"}' "404"
+
+# ── 14. Deduplication (feat 2) ────────────────────────────────────────────────
+section "14. Deduplication"
+
+# Seed incident baru
+curl -s -X POST "$BASE/index" \
+  -H "Content-Type: application/json" \
+  -d '{"incidents":[{"id":"DEDUP-TEST-001","title":"Dedup test incident","service":"dedup-service","severity":"low"}]}' > /dev/null
+
+# Index ulang dengan skip_duplicates=true → harusnya diskip
+RES=$(curl -s -X POST "$BASE/index" \
+  -H "Content-Type: application/json" \
+  -d '{"incidents":[{"id":"DEDUP-TEST-001","title":"Dedup test incident","service":"dedup-service","severity":"low"}],"skip_duplicates":true}')
+SKIPPED=$(echo "$RES" | jq '.skipped // 0')
+INDEXED=$(echo "$RES" | jq '.indexed // 0')
+[ "$SKIPPED" -eq 1 ] && [ "$INDEXED" -eq 0 ] \
+  && pass "skip_duplicates=true → skipped=1, indexed=0" \
+  || fail "Dedup gagal → skipped=$SKIPPED indexed=$INDEXED (expected skipped=1 indexed=0)"
+
+DUP_IDS=$(echo "$RES" | jq -r '.duplicate_ids[0] // ""')
+[ "$DUP_IDS" = "DEDUP-TEST-001" ] \
+  && pass "duplicate_ids berisi DEDUP-TEST-001" \
+  || fail "duplicate_ids salah: $DUP_IDS"
+
+# Index ulang tanpa skip_duplicates (default false) → harusnya overwrite, indexed=1
+RES=$(curl -s -X POST "$BASE/index" \
+  -H "Content-Type: application/json" \
+  -d '{"incidents":[{"id":"DEDUP-TEST-001","title":"Dedup test incident","service":"dedup-service","severity":"low"}]}')
+INDEXED=$(echo "$RES" | jq '.indexed // 0')
+SKIPPED=$(echo "$RES" | jq '.skipped // 0')
+[ "$INDEXED" -eq 1 ] && [ "$SKIPPED" -eq 0 ] \
+  && pass "skip_duplicates=false (default) → overwrite, indexed=1" \
+  || fail "Default behavior salah → indexed=$INDEXED skipped=$SKIPPED"
+
+# /index/default ulang → harusnya overwrite semua (skip_duplicates tidak aktif di default route)
+RES=$(curl -s -X POST "$BASE/index/default")
+INDEXED=$(echo "$RES" | jq '.indexed // 0')
+HAS_SKIPPED=$(echo "$RES" | jq 'has("skipped")')
+[ "$INDEXED" -gt 0 ] && [ "$HAS_SKIPPED" = "true" ] \
+  && pass "POST /index/default response include skipped field → indexed=$INDEXED" \
+  || fail "POST /index/default response format salah"
+
+# Cleanup
+curl -s -X DELETE "$BASE/incidents/DEDUP-TEST-001" > /dev/null
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 ELAPSED=$(( $(date +%s) - START ))

@@ -28,7 +28,7 @@ try:
 except ImportError:
     pass
 
-from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents, update_incident_resolution, get_resolved_incidents
+from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents, update_incident_resolution, get_resolved_incidents, delete_incident, update_incident_fields
 from triage import generate_triage_brief
 from slack_notifier import notify_slack_autopilot
 
@@ -86,8 +86,8 @@ async def on_startup():
                 sample_path = Path(__file__).parent.parent / "data" / "incidents.json"
                 if sample_path.exists():
                     raw = json.loads(sample_path.read_text())
-                    count = index_incidents(raw)
-                    log.info("Auto-indexed %d sample incidents from data/incidents.json", count)
+                    result = index_incidents(raw)
+                    log.info("Auto-indexed %d sample incidents from data/incidents.json", result["indexed"])
                 else:
                     log.warning("AUTO_INDEX_DEFAULT=true but data/incidents.json not found")
             else:
@@ -261,7 +261,8 @@ class SearchRequest(BaseModel):
 class IndexRequest(BaseModel):
     """Batch index request. Every incident is fully validated before any DB write."""
 
-    incidents: Annotated[List[IncidentInput], Field(min_length=1)]
+    incidents:       Annotated[List[IncidentInput], Field(min_length=1)]
+    skip_duplicates: bool = Field(False, description="Skip incidents whose ID already exists in the index.")
 
 
 # ── Typed adapter for file / default-dataset routes ──────────────────────────
@@ -363,8 +364,8 @@ def index(req: IndexRequest):
     Every incident is schema-validated before any DB write is attempted.
     """
     try:
-        count = index_incidents(_to_dicts(req.incidents))
-        return {"indexed": count, "status": "ok"}
+        result = index_incidents(_to_dicts(req.incidents), skip_duplicates=req.skip_duplicates)
+        return {"indexed": result["indexed"], "skipped": result["skipped"], "duplicate_ids": result["duplicate_ids"], "status": "ok"}
     except Exception as e:
         raise _db_error(e)
 
@@ -403,8 +404,8 @@ async def index_from_file(file: UploadFile = File(...)):
         )
 
     try:
-        count = index_incidents(_to_dicts(incidents))
-        return {"indexed": count, "filename": file.filename, "status": "ok"}
+        result = index_incidents(_to_dicts(incidents))
+        return {"indexed": result["indexed"], "skipped": result["skipped"], "duplicate_ids": result["duplicate_ids"], "filename": file.filename, "status": "ok"}
     except Exception as e:
         raise _db_error(e)
 
@@ -444,8 +445,8 @@ def index_default():
         )
 
     try:
-        count = index_incidents(_to_dicts(incidents))
-        return {"indexed": count, "source": "sample_dataset", "status": "ok"}
+        result = index_incidents(_to_dicts(incidents))
+        return {"indexed": result["indexed"], "skipped": result["skipped"], "duplicate_ids": result["duplicate_ids"], "source": "sample_dataset", "status": "ok"}
     except Exception as e:
         raise _db_error(e)
 
@@ -624,6 +625,162 @@ def resolve_incident(incident_id: str, req: ResolveRequest):
         "confirmed_fix":    req.confirmed_fix,
         "resolved_by":      req.resolved_by,
         "message":          f"Incident marked as {req.resolution_status}.",
+    }
+
+
+@app.delete("/incidents/{incident_id}")
+def delete_incident_endpoint(incident_id: str):
+    """
+    Delete an incident from the index by its string ID (e.g. "INC-001").
+
+    Use this to remove incorrectly indexed incidents, duplicates, or test data.
+    This operation is irreversible — the incident cannot be recovered after deletion.
+
+    Example:
+      curl -X DELETE http://localhost:8000/incidents/INC-001
+    """
+    try:
+        found = delete_incident(incident_id)
+    except Exception as e:
+        raise _db_error(e)
+
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Incident '{incident_id}' not found in the index.",
+        )
+
+    return {
+        "incident_id": incident_id,
+        "deleted":     True,
+        "message":     f"Incident '{incident_id}' deleted from index.",
+    }
+
+
+class UpdateIncidentRequest(BaseModel):
+    """
+    Payload for updating editable fields on an existing incident.
+
+    All fields are optional — only provided fields are updated.
+    Omitted fields retain their current values.
+
+    Editable: title, service, component, severity, date,
+              error_message, root_cause, fix, stack_trace, tags.
+
+    Read-only (managed by system): id, resolution_status, confirmed_fix,
+              resolved_by, resolved_at, retrieval_text, exception_class.
+
+    When stack_trace is updated, exception_class and stack_methods are
+    automatically re-extracted. The vector is always re-embedded from the
+    updated content so search accuracy is preserved.
+    """
+    title:         Optional[str]           = Field(None, min_length=1, max_length=300)
+    service:       Optional[str]           = Field(None, max_length=100)
+    component:     Optional[str]           = Field(None, max_length=100)
+    severity:      Optional[SeverityLiteral] = None
+    date:          Optional[str]           = None
+    error_message: Optional[str]           = Field(None, max_length=2000)
+    root_cause:    Optional[str]           = Field(None, max_length=5000)
+    fix:           Optional[str]           = Field(None, max_length=5000)
+    stack_trace:   Optional[str]           = Field(None, max_length=10000)
+    tags:          Optional[List[str]]     = None
+
+    @field_validator("title", mode="after")
+    @classmethod
+    def _title_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("title cannot be blank or whitespace only")
+        return v
+
+    @field_validator("date", mode="after")
+    @classmethod
+    def _validate_date(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        dt_match = _ISO_DATETIME_RE.match(v)
+        if dt_match:
+            v = dt_match.group(1)
+        if not _ISO_DATE_RE.match(v):
+            raise ValueError(f"date must be ISO-8601 YYYY-MM-DD, got {v!r}")
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"date is not a valid calendar date: {v!r}")
+        return v
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _coerce_tags(cls, v: Any) -> Any:
+        # Reuse the same coercion logic as IncidentInput
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return [t.strip() for t in v.split(",") if t.strip()]
+        if isinstance(v, list):
+            result = []
+            for i, tag in enumerate(v):
+                if not isinstance(tag, str):
+                    raise ValueError(f"tags[{i}] must be a string")
+                stripped = tag.strip()
+                if len(stripped) > 80:
+                    raise ValueError(f"tags[{i}] too long (max 80 chars)")
+                if stripped:
+                    result.append(stripped)
+            if len(result) > 30:
+                raise ValueError(f"too many tags: got {len(result)}, max 30")
+            return result
+        raise ValueError("tags must be a list of strings or comma-separated string")
+
+    def to_update_dict(self) -> Dict[str, Any]:
+        """Return only explicitly set fields (exclude unset/None)."""
+        return {
+            k: v for k, v in self.model_dump().items()
+            if v is not None
+        }
+
+
+@app.patch("/incidents/{incident_id}")
+def update_incident_endpoint(incident_id: str, req: UpdateIncidentRequest):
+    """
+    Update editable fields on an existing incident and re-embed.
+
+    Only provided fields are changed. The search vector is re-computed from
+    the updated content so retrieval accuracy is preserved after the update.
+
+    Use this to add postmortem data (root_cause, fix) after an incident closes,
+    correct mislabeled severity, or update tags for better clustering.
+
+    Example:
+      curl -X PATCH http://localhost:8000/incidents/INC-001 \\
+        -H 'Content-Type: application/json' \\
+        -d '{
+          "root_cause": "HikariCP max-pool-size set too low (10) for peak traffic.",
+          "fix": "Increased max-pool-size to 30, added connection timeout alert.",
+          "tags": ["connection-pool", "hikari", "performance"]
+        }'
+    """
+    fields = req.to_update_dict()
+    if not fields:
+        raise HTTPException(
+            status_code=422,
+            detail="No updatable fields provided — include at least one field to update.",
+        )
+
+    try:
+        found = update_incident_fields(incident_id=incident_id, fields=fields)
+    except Exception as e:
+        raise _db_error(e)
+
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Incident '{incident_id}' not found in the index.",
+        )
+
+    return {
+        "incident_id":    incident_id,
+        "updated_fields": list(fields.keys()),
+        "message":        f"Incident '{incident_id}' updated and re-embedded.",
     }
 
 
@@ -906,7 +1063,7 @@ def webhook_slack(payload: SlackWebhook):
         )
 
     try:
-        count = index_incidents([incident.to_dict()])
+        result = index_incidents([incident.to_dict()], skip_duplicates=True)
 
         try:
             query = " ".join(filter(None, [normalized.get("title"), normalized.get("error_message")]))
@@ -919,7 +1076,8 @@ def webhook_slack(payload: SlackWebhook):
 
         return {
             "status":      "ok",
-            "indexed":     count,
+            "indexed":     result["indexed"],
+            "skipped":     result["skipped"],
             "incident_id": normalized.get("id") or "(generated)",
             "source":      "slack_webhook",
             "autopilot":   "triggered",
@@ -1107,7 +1265,7 @@ def webhook_pagerduty(payload: PagerDutyWebhook):
         )
 
     try:
-        count = index_incidents([incident.to_dict()])
+        result = index_incidents([incident.to_dict()], skip_duplicates=True)
 
         # ── Incident Autopilot ────────────────────────────────────────────
         # After indexing, auto-search for similar past incidents and notify Slack.
@@ -1127,7 +1285,8 @@ def webhook_pagerduty(payload: PagerDutyWebhook):
 
         return {
             "status":      "ok",
-            "indexed":     count,
+            "indexed":     result["indexed"],
+            "skipped":     result["skipped"],
             "incident_id": normalized.get("id") or "(generated)",
             "source":      "pagerduty_webhook",
             "autopilot":   "triggered",
