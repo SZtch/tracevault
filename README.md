@@ -152,7 +152,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 **6. Index the sample dataset**
 ```bash
 curl -X POST http://localhost:8000/index/default
-# → {"indexed": 45, "source": "sample_dataset", "status": "ok"}
+# → {"indexed": 45, "skipped": 0, "duplicate_ids": [], "source": "sample_dataset", "status": "ok"}
 ```
 
 **7. Open the app**
@@ -256,7 +256,7 @@ Redeploy. The backend will only accept requests from that origin.
 
 ```bash
 curl -X POST https://your-backend.up.railway.app/index/default
-# → {"indexed": 45, "source": "sample_dataset", "status": "ok"}
+# → {"indexed": 45, "skipped": 0, "duplicate_ids": [], "source": "sample_dataset", "status": "ok"}
 ```
 
 Or use the Index tab in the frontend.
