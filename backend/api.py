@@ -28,7 +28,7 @@ try:
 except ImportError:
     pass
 
-from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents
+from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents, update_incident_resolution, get_resolved_incidents
 from triage import generate_triage_brief
 from slack_notifier import notify_slack_autopilot
 
@@ -76,6 +76,24 @@ async def on_startup():
     log.info("  Frontend URL: %s", _FRONTEND_URL or "(not set — CORS open)")
     from triage import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
     log.info("  Triage brief: %s", f"enabled (model={ANTHROPIC_MODEL})" if ANTHROPIC_API_KEY else "disabled (ANTHROPIC_API_KEY not set)")
+
+    # Auto-index sample dataset on first boot if collection is empty.
+    # Controlled by AUTO_INDEX_DEFAULT=true (env var) — off by default in prod.
+    if os.getenv("AUTO_INDEX_DEFAULT", "false").lower() == "true":
+        try:
+            from vectordb import get_incident_count, index_incidents
+            if get_incident_count() == 0:
+                sample_path = Path(__file__).parent.parent / "data" / "incidents.json"
+                if sample_path.exists():
+                    raw = json.loads(sample_path.read_text())
+                    count = index_incidents(raw)
+                    log.info("Auto-indexed %d sample incidents from data/incidents.json", count)
+                else:
+                    log.warning("AUTO_INDEX_DEFAULT=true but data/incidents.json not found")
+            else:
+                log.info("Auto-index skipped — collection already has data")
+        except Exception as e:
+            log.warning("Auto-index failed (non-fatal): %s", e)
 
 
 # ── Severity ──────────────────────────────────────────────────────────────────
@@ -531,6 +549,161 @@ def recurring_failures(top_k: int = 10):
         "patterns":        patterns[:top_k],
         "total_incidents": len(incidents),
         "total_patterns":  len(patterns),
+    }
+
+
+
+# ── Resolution Tracking ───────────────────────────────────────────────────────
+
+class ResolveRequest(BaseModel):
+    """
+    Payload for marking an incident as resolved.
+
+    resolution_status:
+      "resolved"  — fix was applied, incident closed.
+      "confirmed" — fix has been verified to work (stronger signal).
+
+    confirmed_fix:
+      Optional. Engineer-provided fix text. When set, overrides the original
+      'fix' field in search results — it's treated as the ground-truth solution.
+
+    resolved_by:
+      Optional. Free-text identifier (name, team, Slack handle).
+    """
+    resolution_status: Literal["resolved", "confirmed"] = "resolved"
+    confirmed_fix:     Optional[str] = Field(None, max_length=5000)
+    resolved_by:       Optional[str] = Field(None, max_length=100)
+
+
+@app.patch("/incidents/{incident_id}/resolve")
+def resolve_incident(incident_id: str, req: ResolveRequest):
+    """
+    Mark an incident as resolved and optionally confirm what fix worked.
+
+    When confirmed_fix is provided, search results for similar future incidents
+    will surface this as the verified fix — making the DB progressively smarter.
+
+    Example:
+      curl -X PATCH http://localhost:8000/incidents/INC-001/resolve \\
+        -H 'Content-Type: application/json' \\
+        -d '{"resolution_status": "confirmed", "confirmed_fix": "Increased HikariCP pool size to 30", "resolved_by": "platform-team"}'
+    """
+    found = update_incident_resolution(
+        incident_id       = incident_id,
+        resolution_status = req.resolution_status,
+        confirmed_fix     = req.confirmed_fix,
+        resolved_by       = req.resolved_by,
+    )
+
+    if not found:
+        raise HTTPException(
+            status_code = 404,
+            detail      = f"Incident '{incident_id}' not found in the index.",
+        )
+
+    return {
+        "incident_id":      incident_id,
+        "resolution_status": req.resolution_status,
+        "confirmed_fix":    req.confirmed_fix,
+        "resolved_by":      req.resolved_by,
+        "message":          f"Incident marked as {req.resolution_status}.",
+    }
+
+
+@app.get("/analytics/resolutions")
+def resolution_stats():
+    """
+    Summarise confirmed fix patterns across all resolved incidents.
+
+    Returns:
+      - resolved_count / confirmed_count totals
+      - fix_patterns: grouped by failure_mode, with confirmed fixes surfaced
+      - top_resolvers: who's been closing incidents most
+      - recent: last 10 resolved incidents
+
+    This endpoint is what makes TraceVault progressively smarter:
+    the more incidents are confirmed, the richer the fix-pattern library becomes.
+    """
+    try:
+        incidents = get_resolved_incidents()
+    except Exception as e:
+        raise _db_error(e)
+
+    if not incidents:
+        return {
+            "resolved_count":  0,
+            "confirmed_count": 0,
+            "fix_patterns":    [],
+            "top_resolvers":   [],
+            "recent":          [],
+        }
+
+    resolved_count  = sum(1 for i in incidents if i.get("resolution_status") == "resolved")
+    confirmed_count = sum(1 for i in incidents if i.get("resolution_status") == "confirmed")
+
+    # ── Group confirmed fixes by failure_mode ─────────────────────────────────
+    from collections import defaultdict, Counter
+    by_mode: Dict[str, list] = defaultdict(list)
+    for inc in incidents:
+        mode = (inc.get("failure_mode") or "other").strip() or "other"
+        by_mode[mode].append(inc)
+
+    fix_patterns = []
+    for mode, incs in by_mode.items():
+        confirmed = [i for i in incs if i.get("resolution_status") == "confirmed" and i.get("confirmed_fix")]
+        fixes = [
+            {
+                "incident_id":  i.get("incident_id"),
+                "title":        i.get("title"),
+                "confirmed_fix": i.get("confirmed_fix"),
+                "service":      i.get("service"),
+                "resolved_by":  i.get("resolved_by"),
+                "resolved_at":  i.get("resolved_at"),
+            }
+            for i in confirmed
+        ]
+        fix_patterns.append({
+            "failure_mode":    mode,
+            "total_resolved":  len(incs),
+            "confirmed_fixes": len(confirmed),
+            "fixes":           fixes,
+        })
+
+    fix_patterns.sort(key=lambda x: x["confirmed_fixes"], reverse=True)
+
+    # ── Top resolvers ─────────────────────────────────────────────────────────
+    resolvers = [i.get("resolved_by") for i in incidents if i.get("resolved_by")]
+    top_resolvers = [
+        {"resolver": name, "count": count}
+        for name, count in Counter(resolvers).most_common(10)
+    ]
+
+    # ── Recent resolutions (last 10, newest first) ────────────────────────────
+    dated = sorted(
+        [i for i in incidents if i.get("resolved_at")],
+        key=lambda x: x["resolved_at"],
+        reverse=True,
+    )
+    recent = [
+        {
+            "incident_id":      i.get("incident_id"),
+            "title":            i.get("title"),
+            "resolution_status": i.get("resolution_status"),
+            "confirmed_fix":    i.get("confirmed_fix"),
+            "resolved_by":      i.get("resolved_by"),
+            "resolved_at":      i.get("resolved_at"),
+            "service":          i.get("service"),
+            "severity":         i.get("severity"),
+        }
+        for i in dated[:10]
+    ]
+
+    return {
+        "resolved_count":  resolved_count,
+        "confirmed_count": confirmed_count,
+        "fix_patterns":    fix_patterns,
+        "top_resolvers":   top_resolvers,
+        "recent":          recent,
     }
 
 

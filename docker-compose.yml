@@ -57,6 +57,7 @@ services:
       # Ollama -- optional, for fully offline triage briefs
       OLLAMA_URL: "${OLLAMA_URL:-}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3}"
+      AUTO_INDEX_DEFAULT: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

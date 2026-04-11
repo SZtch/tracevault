@@ -474,6 +474,9 @@ def search_incidents(
         out = []
         for r in results:
             explanation = build_match_reason(query, r.payload)
+            # confirmed_fix overrides the original fix when present —
+            # it's the engineer-verified solution, so it's more trustworthy.
+            confirmed_fix = r.payload.get("confirmed_fix") or None
             out.append({
                 "id":            r.id,
                 "score":         round(float(r.score), 4),
@@ -481,11 +484,16 @@ def search_incidents(
                 "title":         r.payload.get("title"),
                 "error_message": r.payload.get("error_message"),
                 "root_cause":    r.payload.get("root_cause"),
-                "fix":           r.payload.get("fix"),
+                "fix":           confirmed_fix or r.payload.get("fix"),
+                "fix_confirmed": confirmed_fix is not None,
                 "service":       r.payload.get("service"),
                 "severity":      r.payload.get("severity"),
                 "date":          r.payload.get("date"),
                 "tags":          r.payload.get("tags", "").split(","),
+                # ── Resolution tracking ─────────────────────────────────────
+                "resolution_status": r.payload.get("resolution_status", "open"),
+                "resolved_at":       r.payload.get("resolved_at"),
+                "resolved_by":       r.payload.get("resolved_by"),
                 # ── Explanation layer ───────────────────────────────────────
                 "matched_terms":  explanation["matched_terms"],
                 "match_reason":   explanation["match_reason"],
@@ -620,3 +628,82 @@ def get_incident_count() -> int:
             return total
     except Exception:
         return 0
+
+
+import logging as _logging
+_log = _logging.getLogger("tracevault.vectordb")
+
+
+def update_incident_resolution(
+    incident_id: str,
+    resolution_status: str,
+    confirmed_fix: Optional[str] = None,
+    resolved_by: Optional[str] = None,
+) -> bool:
+    """
+    Update resolution metadata on an existing incident payload.
+
+    Uses Python-side filtering (scroll all → match incident_id) to avoid
+    FilterBuilder compatibility issues with the VectorAI SDK on scroll.
+    Re-embeds using the stored retrieval_text so the vector stays consistent.
+
+    Returns True if found and updated, False if incident_id not found.
+    """
+    from datetime import datetime, timezone
+
+    with get_client() as client:
+        if not client.collections.exists(COLLECTION):
+            return False
+
+        # Scroll all points, find by incident_id in Python
+        found_point = None
+        offset = None
+        while True:
+            batch, next_offset = client.points.scroll(
+                COLLECTION,
+                limit=100,
+                offset=offset,
+                with_payload=True,
+            )
+            for pt in batch:
+                if pt.payload.get("incident_id") == incident_id:
+                    found_point = pt
+                    break
+            if found_point or next_offset is None:
+                break
+            offset = next_offset
+
+        if not found_point:
+            _log.warning("update_incident_resolution: incident_id %r not found", incident_id)
+            return False
+
+        # Merge resolution fields into existing payload
+        payload = dict(found_point.payload)
+        payload["resolution_status"] = resolution_status
+        payload["resolved_at"]       = datetime.now(timezone.utc).isoformat()
+        if confirmed_fix is not None:
+            payload["confirmed_fix"] = confirmed_fix.strip()
+        if resolved_by is not None:
+            payload["resolved_by"] = resolved_by.strip()
+
+        # Upsert with stored retrieval_text — no re-embedding drift
+        retrieval_text = payload.get("retrieval_text") or payload.get("title", "")
+        client.points.upsert(COLLECTION, [PointStruct(
+            id=found_point.id,
+            vector=embed(retrieval_text),
+            payload=payload,
+        )])
+        _log.info("Resolution updated: %s → %s", incident_id, resolution_status)
+        return True
+
+
+def get_resolved_incidents() -> List[Dict[str, Any]]:
+    """
+    Return all incidents marked resolved or confirmed.
+    Filters in Python to avoid FilterBuilder/scroll compatibility issues.
+    """
+    all_incidents = get_all_incidents()
+    return [
+        i for i in all_incidents
+        if i.get("resolution_status") in ("resolved", "confirmed")
+    ]
