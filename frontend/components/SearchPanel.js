@@ -22,9 +22,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
         const data = await res.json()
         setServices(data.services   || [])
         setSeverities(data.severities || [])
-      } catch {
-        // DB not ready — filters stay empty, search still works
-      }
+      } catch { /* DB not ready — filters stay empty */ }
     }
     loadMeta()
   }, [])
@@ -32,9 +30,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
   async function runSearch(q) {
     const text = (q ?? query).trim()
     if (!text) return
-    setLoading(true)
-    setResults([])
-    setSearchError(null)
+    setLoading(true); setResults([]); setSearchError(null)
     if (setTriageBrief) setTriageBrief(null)
 
     const tags = tagsInput.trim()
@@ -52,7 +48,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
           service:   service   || undefined,
           date_from: dateFrom  || undefined,
           date_to:   dateTo    || undefined,
-          tags:      tags,
+          tags,
         }),
       })
       if (!res.ok) {
@@ -71,10 +67,7 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
   }
 
   function handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      runSearch()
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runSearch() }
   }
 
   const selectStyle = {
@@ -83,39 +76,50 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
     color:       'var(--text-dim)',
   }
 
+  const hasActiveFilters = severity || service || dateFrom || dateTo || tagsInput.trim()
+
   return (
     <div
       className="flex-shrink-0 px-6 pt-5 pb-4 sm:px-8 border-b"
       style={{ background: 'var(--bg-2)', borderColor: 'var(--border)' }}
     >
-      {/* Header */}
+      {/* Header row */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
-          <SearchIcon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--text-dim)' }} />
+          <SearchIcon className="w-3.5 h-3.5" style={{ color: 'var(--text-dim)' }} />
           <span className="font-mono text-[10px] font-semibold tracking-widest uppercase" style={{ color: 'var(--text-dim)' }}>
             Incident Search
           </span>
+          {hasActiveFilters && (
+            <span
+              className="font-mono text-[9px] px-1.5 py-0.5 rounded"
+              style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-mid)', color: 'var(--accent)' }}
+            >
+              filtered
+            </span>
+          )}
         </div>
-        <span className="font-mono text-[10px] hidden sm:block" style={{ color: 'var(--text-dim)', opacity: 0.6 }}>
+        <span className="font-mono text-[10px] hidden sm:block" style={{ color: 'var(--text-faint)' }}>
           Enter ↵ to search
         </span>
       </div>
 
-      {/* Input + button */}
+      {/* Query textarea */}
       <div className="relative">
         <textarea
-          className="query-input w-full rounded-lg px-4 py-3 font-mono text-[13px] leading-relaxed resize-none border transition-colors duration-150"
+          className="query-input w-full rounded-lg px-4 py-3 text-[13px] leading-relaxed resize-none border transition-colors duration-150"
           style={{
             background:   'var(--bg-3)',
             borderColor:  'var(--border-bright)',
             color:        'var(--text-bright)',
             minHeight:    '90px',
-            paddingRight: '110px',
+            paddingRight: '112px',
           }}
           placeholder="Paste an error message, stack trace, or incident description…"
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleKey}
+          spellCheck={false}
         />
         <button
           onClick={() => runSearch()}
@@ -124,9 +128,9 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
           style={
             loading || !query.trim()
               ? { background: 'var(--bg-5)', color: 'var(--text-dim)' }
-              : { background: 'var(--accent)', color: 'var(--bg)' }
+              : { background: 'var(--accent)', color: '#fff' }
           }
-          onMouseEnter={e => { if (!loading && query.trim()) e.currentTarget.style.background = '#00e0b4' }}
+          onMouseEnter={e => { if (!loading && query.trim()) e.currentTarget.style.background = '#6B9FFF' }}
           onMouseLeave={e => { if (!loading && query.trim()) e.currentTarget.style.background = 'var(--accent)' }}
         >
           <SearchIcon className="w-3 h-3" />
@@ -134,62 +138,57 @@ export default function SearchPanel({ query, setQuery, setResults, setLoading, l
         </button>
       </div>
 
-      {/* Filters row 1: severity + service */}
-      <div className="flex gap-2 mt-2.5 flex-wrap">
-        {[
-          { value: severity, onChange: setSeverity, placeholder: 'All severities', options: severities },
-          { value: service,  onChange: setService,  placeholder: 'All services',   options: services   },
-        ].map(({ value, onChange, placeholder, options }, idx) => (
-          <select
-            key={idx}
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            className="filter-select font-mono text-[11px] px-3 py-1.5 rounded border transition-colors duration-150 cursor-pointer"
-            style={{ ...selectStyle, color: value ? 'var(--text)' : 'var(--text-dim)' }}
-          >
-            <option value="">{placeholder}</option>
-            {options.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        ))}
+      {/* Filters */}
+      <div className="mt-2.5 flex flex-col gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { value: severity, onChange: setSeverity, placeholder: 'All severities', options: severities },
+            { value: service,  onChange: setService,  placeholder: 'All services',   options: services   },
+          ].map(({ value, onChange, placeholder, options }, idx) => (
+            <select
+              key={idx}
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              className="filter-select text-[11px] px-3 py-1.5 rounded border transition-colors duration-150 cursor-pointer"
+              style={{ ...selectStyle, color: value ? 'var(--text)' : 'var(--text-dim)' }}
+            >
+              <option value="">{placeholder}</option>
+              {options.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          ))}
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          <input
+            type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            className="filter-select text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
+            style={{ ...selectStyle, color: dateFrom ? 'var(--text)' : 'var(--text-dim)' }}
+            title="Date from (inclusive)"
+          />
+          <span className="font-mono text-[10px]" style={{ color: 'var(--text-faint)' }}>→</span>
+          <input
+            type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            className="filter-select text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
+            style={{ ...selectStyle, color: dateTo ? 'var(--text)' : 'var(--text-dim)' }}
+            title="Date to (inclusive)"
+          />
+          <input
+            type="text" value={tagsInput} onChange={e => setTagsInput(e.target.value)}
+            onKeyDown={handleKey}
+            placeholder="filter by tag: kafka, grpc…"
+            className="filter-select text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
+            style={{ ...selectStyle, color: tagsInput ? 'var(--text)' : 'var(--text-dim)', minWidth: '160px' }}
+            spellCheck={false}
+          />
+        </div>
       </div>
 
-      {/* Filters row 2: date range + tags */}
-      <div className="flex gap-2 mt-2 flex-wrap items-center">
-        <input
-          type="date"
-          value={dateFrom}
-          onChange={e => setDateFrom(e.target.value)}
-          className="filter-select font-mono text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
-          style={{ ...selectStyle, color: dateFrom ? 'var(--text)' : 'var(--text-dim)' }}
-          title="Date from (inclusive)"
-        />
-        <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>→</span>
-        <input
-          type="date"
-          value={dateTo}
-          onChange={e => setDateTo(e.target.value)}
-          className="filter-select font-mono text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
-          style={{ ...selectStyle, color: dateTo ? 'var(--text)' : 'var(--text-dim)' }}
-          title="Date to (inclusive)"
-        />
-        <input
-          type="text"
-          value={tagsInput}
-          onChange={e => setTagsInput(e.target.value)}
-          onKeyDown={handleKey}
-          placeholder="tags: kafka, grpc…"
-          className="filter-select font-mono text-[11px] px-3 py-1.5 rounded border transition-colors duration-150"
-          style={{ ...selectStyle, color: tagsInput ? 'var(--text)' : 'var(--text-dim)', minWidth: '140px' }}
-        />
-      </div>
-
-      {/* Search error */}
+      {/* Error */}
       {searchError && (
         <div
-          className="flex items-start gap-2 mt-3 px-3.5 py-2.5 rounded-md font-mono text-xs"
-          style={{ background: 'var(--red-dim)', border: '1px solid var(--red-border)', color: 'var(--red)' }}
+          className="flex items-start gap-2 mt-3 px-3.5 py-2.5 rounded-md text-sm"
+          style={{ background: 'var(--danger-dim)', border: '1px solid var(--danger-border)', color: 'var(--danger)', fontFamily: 'var(--sans)' }}
         >
-          <span className="flex-shrink-0 mt-px">⚠</span>
+          <span className="flex-shrink-0 font-mono mt-px">⚠</span>
           <span>{searchError}</span>
         </div>
       )}

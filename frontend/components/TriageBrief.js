@@ -3,14 +3,8 @@
 import { ShieldIcon } from '@/components/Icons'
 
 /**
- * TriageBrief — renders the structured brief returned by the /search endpoint.
- *
- * Constraints:
- * - Display only. No chat input. No user interaction beyond reading.
- * - Rendered above the result list when triage_brief is non-null.
- * - Matches the existing dark design system (CSS vars, font-mono, borders).
- * - If brief is null (API key missing or call failed), renders nothing —
- *   the result list continues to work normally.
+ * TriageBrief — hero operational summary above search results.
+ * Display only. No user interaction.
  */
 export default function TriageBrief({ brief }) {
   if (!brief) return null
@@ -25,115 +19,119 @@ export default function TriageBrief({ brief }) {
 
   return (
     <div
-      className="mb-5 rounded-xl animate-fade-in"
+      className="mb-6 rounded-xl animate-fade-in overflow-hidden"
       style={{
-        background:   'var(--bg-3)',
-        border:       '1px solid var(--accent-mid)',
-        borderLeft:   '3px solid var(--accent)',
-        overflow:     'hidden',
+        background:  'var(--bg-3)',
+        border:      '1px solid var(--accent-mid)',
+        borderLeft:  '3px solid var(--accent)',
+        boxShadow:   '0 1px 16px rgba(0, 0, 0, 0.35)',
       }}
     >
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+      {/* ── Header ── */}
       <div
-        className="flex items-center gap-2.5 px-5 py-3 border-b"
+        className="flex items-center gap-3 px-6 py-4 border-b"
         style={{
-          background:   'var(--accent-dim)',
-          borderColor:  'var(--accent-mid)',
+          background:  'var(--bg-4)',
+          borderColor: 'rgba(79, 140, 255, 0.14)',
         }}
       >
-        <ShieldIcon
-          className="w-3.5 h-3.5 flex-shrink-0"
-          style={{ color: 'var(--accent)' }}
-        />
+        <ShieldIcon className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
         <span
-          className="font-mono text-[11px] font-semibold tracking-widest uppercase"
-          style={{ color: 'var(--accent)' }}
+          className="text-sm font-semibold tracking-tight"
+          style={{ color: 'var(--text-bright)', fontFamily: 'var(--sans)' }}
         >
           Triage Brief
         </span>
         <span
-          className="font-mono text-[10px] tracking-wide ml-auto"
-          style={{ color: 'var(--text-dim)' }}
+          className="font-mono text-[9px] font-semibold tracking-widest uppercase px-1.5 py-0.5 rounded"
+          style={{
+            background:  'var(--accent-dim)',
+            border:      '1px solid var(--accent-mid)',
+            color:       'var(--accent)',
+          }}
         >
-          Grounded in retrieved incidents only
+          AI
+        </span>
+        <span className="text-xs ml-auto" style={{ color: 'var(--text-dim)', fontFamily: 'var(--sans)' }}>
+          Grounded in retrieved incidents
         </span>
       </div>
 
-      {/* ── Body ────────────────────────────────────────────────────────── */}
-      <div className="px-5 py-4 grid gap-4">
+      {/* ── Failure family + Likely cause ── */}
+      <div className="px-6 pt-5 pb-5 grid sm:grid-cols-2 gap-6">
+        <BriefField label="Failure Family" value={failure_family} />
+        <BriefField label="Likely Cause"   value={likely_cause}   highlight />
+      </div>
 
-        {/* Failure family + Likely cause — side by side on wider screens */}
-        <div className="grid sm:grid-cols-2 gap-5">
-          <BriefField
-            label="Failure Family"
-            value={failure_family}
-          />
-          <BriefField
-            label="Likely Cause"
-            value={likely_cause}
-            highlight
-          />
-        </div>
-
-        {/* First-response checks */}
-        {Array.isArray(first_response_checks) && first_response_checks.length > 0 && (
+      {/* ── Check First — most scannable section ── */}
+      {Array.isArray(first_response_checks) && first_response_checks.length > 0 && (
+        <>
+          <hr className="brief-divider" />
           <div
-            className="rounded-lg px-4 py-3"
-            style={{
-              background: 'rgba(90, 112, 128, 0.08)',
-              border:     '1px solid var(--accent-mid)',
-            }}
+            className="px-6 py-5"
+            style={{ background: 'rgba(79, 140, 255, 0.025)' }}
           >
-            <FieldLabel>Check First</FieldLabel>
-            <ol className="mt-2 space-y-2">
+            <div className="flex items-center gap-2 mb-4">
+              <span
+                className="font-mono text-[10px] font-semibold tracking-widest uppercase"
+                style={{ color: 'var(--accent)' }}
+              >
+                Check First
+              </span>
+              <div className="flex-1 h-px" style={{ background: 'rgba(79, 140, 255, 0.15)' }} />
+            </div>
+            <ol className="space-y-3">
               {first_response_checks.map((check, i) => (
-                <li
-                  key={i}
-                  className="flex items-baseline gap-2.5 font-mono text-[12px] leading-snug"
-                  style={{ color: 'var(--text-bright)' }}
-                >
+                <li key={i} className="flex items-start gap-3.5">
                   <span
-                    className="flex-shrink-0 font-bold tabular-nums"
+                    className="flex-shrink-0 font-mono text-[11px] font-bold tabular-nums mt-0.5 w-5 text-right leading-tight"
                     style={{ color: 'var(--accent)' }}
                   >
                     {i + 1}.
                   </span>
-                  {check}
+                  <span
+                    className="text-[14px] font-medium leading-snug"
+                    style={{ color: 'var(--text-bright)', fontFamily: 'var(--sans)' }}
+                  >
+                    {check}
+                  </span>
                 </li>
               ))}
             </ol>
           </div>
-        )}
+        </>
+      )}
 
-        {/* Known fix pattern */}
-        <BriefField
-          label="Known Fix Pattern"
-          value={known_fix_pattern}
-        />
+      {/* ── Known fix pattern ── */}
+      {known_fix_pattern && (
+        <>
+          <hr className="brief-divider" />
+          <div className="px-6 py-5">
+            <BriefField label="Known Fix Pattern" value={known_fix_pattern} />
+          </div>
+        </>
+      )}
 
-        {/* Confidence note */}
-        <div
-          className="flex items-start gap-2.5 px-4 py-3 rounded-md"
-          style={{
-            background:  'rgba(90, 112, 128, 0.10)',
-            border:      '1px solid var(--border-bright)',
-          }}
-        >
-          <span
-            className="flex-shrink-0 font-mono text-[10px] tracking-widest uppercase mt-px"
-            style={{ color: 'var(--text-dim)' }}
+      {/* ── Confidence note — footer ── */}
+      {confidence_note && (
+        <>
+          <hr className="brief-divider" />
+          <div
+            className="px-6 py-3 flex items-start gap-3"
+            style={{ background: 'rgba(0, 0, 0, 0.18)' }}
           >
-            Confidence
-          </span>
-          <span
-            className="font-mono text-[12px] leading-relaxed"
-            style={{ color: 'var(--text-mid)' }}
-          >
-            {confidence_note}
-          </span>
-        </div>
-
-      </div>
+            <span
+              className="flex-shrink-0 font-mono text-[9px] font-semibold tracking-widest uppercase mt-0.5"
+              style={{ color: 'var(--text-faint)' }}
+            >
+              Confidence
+            </span>
+            <span className="text-[13px] leading-relaxed" style={{ color: 'var(--text-dim)', fontFamily: 'var(--sans)' }}>
+              {confidence_note}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -143,7 +141,7 @@ export default function TriageBrief({ brief }) {
 function FieldLabel({ children }) {
   return (
     <span
-      className="font-mono text-[10px] font-semibold tracking-widest uppercase block"
+      className="font-mono text-[9px] font-semibold tracking-widest uppercase block"
       style={{ color: 'var(--text-dim)' }}
     >
       {children}
@@ -157,8 +155,12 @@ function BriefField({ label, value, highlight = false }) {
     <div>
       <FieldLabel>{label}</FieldLabel>
       <p
-        className="font-mono text-[12px] leading-relaxed mt-1.5"
-        style={{ color: highlight ? 'var(--text-bright)' : 'var(--text)' }}
+        className="text-[14px] leading-relaxed mt-2 font-medium"
+        style={{
+          color:      highlight ? 'var(--text-bright)' : 'var(--text)',
+          fontFamily: 'var(--sans)',
+          fontWeight: highlight ? 500 : 400,
+        }}
       >
         {value}
       </p>
