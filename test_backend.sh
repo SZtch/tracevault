@@ -57,7 +57,7 @@ RES=$(curl -s -w "\n%{http_code}" -X POST $BASE/index \
     "root_cause": "Max pool size reached under load",
     "fix": "Increased pool size to 30",
     "tags": ["connection-pool", "hikari"]
-  }]')
+  }]}')
 STATUS=$(echo "$RES" | tail -1)
 [ "$STATUS" = "200" ] && pass "POST /index single incident → 200" || fail "POST /index → $STATUS | $(echo "$RES" | head -1 | jq -c '.detail // .' 2>/dev/null)"
 
