@@ -1,6 +1,9 @@
 'use client'
 
+import { useState } from 'react'
 import { LayersIcon, WrenchIcon, TerminalIcon, TagIcon } from '@/components/Icons'
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 // Signal → human label
 const PRIMARY_SIGNAL_LABEL = {
@@ -317,6 +320,84 @@ export default function ResultCard({ result, rank }) {
             )}
           </div>
         </>
+      )}
+
+      {result.incident_id && result.resolution_status === "open" && (
+        <ResolveButton incidentId={result.incident_id} />
+      )}
+    </div>
+  )
+}
+
+function ResolveButton({ incidentId }) {
+  const [open,    setOpen]    = useState(false)
+  const [fix,     setFix]     = useState('')
+  const [loading, setLoading] = useState(false)
+  const [done,    setDone]    = useState(false)
+
+  async function handleResolve() {
+    if (!fix.trim()) return
+    setLoading(true)
+    try {
+      const res = await fetch(`${API}/incidents/${incidentId}/resolve`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ resolution_status: 'confirmed', confirmed_fix: fix.trim(), resolved_by: 'ui' }),
+      })
+      if (res.ok) { setDone(true); setOpen(false) }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (done) return (
+    <div className="mt-2 font-mono text-[10px]" style={{ color: 'var(--accent)' }}>
+      ✓ Marked as resolved
+    </div>
+  )
+
+  return (
+    <div className="mt-2">
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="font-mono text-[10px] px-2 py-1 rounded border transition-colors"
+          style={{ borderColor: 'var(--border)', color: 'var(--text-dim)', background: 'var(--bg-4)' }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+          onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border)'}
+        >
+          ✓ Mark Resolved
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <textarea
+            value={fix}
+            onChange={e => setFix(e.target.value)}
+            placeholder="What fixed it? (required)"
+            rows={2}
+            className="w-full font-mono text-[11px] px-2 py-1.5 rounded border resize-none outline-none"
+            style={{ background: 'var(--bg-4)', borderColor: 'var(--border)', color: 'var(--text)' }}
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={handleResolve}
+              disabled={loading || !fix.trim()}
+              className="font-mono text-[10px] px-3 py-1 rounded border"
+              style={{ borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-dim)', opacity: loading || !fix.trim() ? 0.5 : 1 }}
+            >
+              {loading ? 'Saving…' : 'Save Fix'}
+            </button>
+            <button
+              onClick={() => setOpen(false)}
+              className="font-mono text-[10px] px-3 py-1 rounded border"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

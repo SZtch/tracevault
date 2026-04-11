@@ -11,6 +11,8 @@ const SEV = {
   low:      { bg: 'var(--accent-dim)',        border: 'var(--accent-mid)',        text: 'var(--accent)'  },
 }
 
+const SEV_EMOJI = { critical: '🔴', high: '🟠', medium: '🟡', low: '🟢' }
+
 const STATUS_COLOR = {
   open:      { text: 'var(--text-dim)' },
   resolved:  { text: 'var(--accent)'   },
@@ -48,17 +50,23 @@ function Bar({ pct, color }) {
 }
 
 export default function DashboardPanel() {
-  const [data,    setData]    = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState(null)
+  const [data,      setData]      = useState(null)
+  const [recurring, setRecurring] = useState(null)
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState(null)
 
   async function reload() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`${API}/analytics/dashboard`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setData(await res.json())
+      const [dashRes, recurRes] = await Promise.all([
+        fetch(`${API}/analytics/dashboard`),
+        fetch(`${API}/analytics/recurring?top_k=5`),
+      ])
+      if (!dashRes.ok)  throw new Error(`Dashboard HTTP ${dashRes.status}`)
+      if (!recurRes.ok) throw new Error(`Recurring HTTP ${recurRes.status}`)
+      setData(await dashRes.json())
+      setRecurring(await recurRes.json())
     } catch (e) {
       setError(e.message)
     } finally {
@@ -143,6 +151,48 @@ export default function DashboardPanel() {
           })}
         </div>
       </div>
+
+      {/* Recurring Failure Detection */}
+      {recurring && recurring.patterns && recurring.patterns.length > 0 && (
+        <div>
+          <div className="font-mono text-[9px] tracking-widest uppercase mb-3" style={{ color: 'var(--text-dim)' }}>
+            Recurring Failures
+          </div>
+          <div className="space-y-2">
+            {recurring.patterns.map((p, i) => {
+              const emoji    = SEV_EMOJI[p.top_severity] || '⚪'
+              const maxCount = recurring.patterns[0].count
+              const pct      = Math.round(p.count / maxCount * 100)
+              return (
+                <div
+                  key={i}
+                  className="rounded-md px-3 py-2.5 border"
+                  style={{ background: 'var(--bg-3)', borderColor: 'var(--border)' }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs flex-shrink-0">{emoji}</span>
+                    <span className="font-mono text-[11px] flex-1 truncate" style={{ color: 'var(--text)' }}>
+                      {p.failure_mode}
+                    </span>
+                    <span className="font-mono text-[11px] flex-shrink-0 font-semibold" style={{ color: 'var(--accent)' }}>
+                      {p.count}x
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <Bar pct={pct} color="var(--accent)" />
+                    <span className="font-mono text-[10px] flex-shrink-0" style={{ color: 'var(--text-dim)' }}>
+                      {p.affected_services.length} service{p.affected_services.length !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <p className="font-mono text-[10px] mt-2" style={{ color: 'var(--text-dim)', opacity: 0.5 }}>
+            {recurring.total_patterns} patterns across {recurring.total_incidents} incidents
+          </p>
+        </div>
+      )}
 
       {/* Top services + Recent incidents */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
