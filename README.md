@@ -447,4 +447,5 @@ Webhooks (Slack, PagerDuty) always use `skip_duplicates: true` automatically —
 | `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Anthropic model for triage briefs |
 | `OLLAMA_URL` | Backend | — | Ollama base URL for offline triage (e.g. `http://localhost:11434`) |
 | `OLLAMA_MODEL` | Backend | `llama3` | Ollama model for triage briefs |
+| `SLACK_WEBHOOK_URL` | Backend | — | Slack incoming webhook URL — enables Autopilot notifications on webhook ingest |
 | `NEXT_PUBLIC_API_URL` | Frontend (Vercel) | — | Railway backend public URL |

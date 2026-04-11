@@ -276,7 +276,7 @@ export default function Home() {
 
               {/* Result cards */}
               {!loading && results.map((r, i) => (
-                <ResultCard key={r.incident_id} result={r} rank={i + 1} />
+                <ResultCard key={r.incident_id || String(r.id)} result={r} rank={i + 1} />
               ))}
             </div>
           </>

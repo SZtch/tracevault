@@ -89,7 +89,7 @@ def _build_slack_message(
         for i, r in enumerate(results[:3], 1):
             score     = r.get("score", 0)
             inc_title = r.get("title", "—")[:60]
-            inc_id    = r.get("id", "—")
+            inc_id    = r.get("incident_id", "—")
             fix       = r.get("fix", "")[:80] or "—"
             similar_lines.append(
                 f"*{i}. {inc_id}* — {inc_title}\n"

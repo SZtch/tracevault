@@ -244,8 +244,10 @@ Expected response:
 {
   "status": "ok",
   "indexed": 1,
+  "skipped": 0,
   "incident_id": "Q1A2B3C4",
-  "source": "pagerduty_webhook"
+  "source": "pagerduty_webhook",
+  "autopilot": "triggered"
 }
 ```
 
