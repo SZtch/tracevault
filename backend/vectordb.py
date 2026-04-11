@@ -572,6 +572,32 @@ def get_collection_meta() -> Dict[str, Any]:
         return {"services": [], "severities": [], "error": str(e)}
 
 
+def get_all_incidents() -> List[Dict[str, Any]]:
+    """Scroll through all incidents and return their full payloads."""
+    try:
+        with get_client() as client:
+            if not client.collections.exists(COLLECTION):
+                return []
+            incidents = []
+            offset = None
+            while True:
+                batch, next_offset = client.points.scroll(
+                    COLLECTION,
+                    limit=100,
+                    offset=offset,
+                    with_payload=True,
+                )
+                for pt in batch:
+                    incidents.append(pt.payload)
+                if next_offset is None:
+                    break
+                offset = next_offset
+            return incidents
+    except Exception as e:
+        log.error("get_all_incidents error: %s", e)
+        return []
+
+
 def get_incident_count() -> int:
     """Count total incidents by scrolling the collection."""
     try:

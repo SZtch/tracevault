@@ -28,7 +28,7 @@ try:
 except ImportError:
     pass
 
-from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count
+from vectordb import index_incidents, search_incidents, get_status, get_collection_meta, get_incident_count, get_all_incidents
 from triage import generate_triage_brief
 from slack_notifier import notify_slack_autopilot
 
@@ -440,6 +440,98 @@ def search(req: SearchRequest):
         }
     except Exception as e:
         raise _db_error(e)
+
+
+@app.get("/analytics/recurring")
+def recurring_failures(top_k: int = 10):
+    """
+    Detect recurring failure patterns across all indexed incidents.
+    Groups by failure_mode if available, falls back to keyword clustering
+    from title + error_message. Returns the most frequent patterns.
+    """
+    try:
+        incidents = get_all_incidents()
+    except Exception as e:
+        raise _db_error(e)
+
+    if not incidents:
+        return {"patterns": [], "total_incidents": 0}
+
+    # ── Keyword-based failure family detection ────────────────────────────────
+    _FAILURE_KEYWORDS = [
+        ("connection pool exhaustion",  ["hikari", "pool", "connection not available", "connection timeout"]),
+        ("memory / OOM",               ["oom", "out of memory", "memory pressure", "heap", "killed"]),
+        ("grpc / timeout",             ["grpc", "deadline exceeded", "timeout", "latency spike"]),
+        ("queue / kafka backlog",       ["kafka", "consumer lag", "queue", "backlog", "batch"]),
+        ("upstream / 5xx cascade",     ["504", "502", "upstream", "gateway", "payment", "cascade"]),
+        ("disk / storage",             ["disk", "storage", "inode", "volume", "full"]),
+        ("auth / token",               ["auth", "token", "jwt", "session", "login", "forbidden"]),
+        ("database / query",           ["database", "query", "slow query", "index", "deadlock", "db"]),
+        ("deployment / rollout",       ["deploy", "rollout", "pod", "restart", "crashloop", "readiness"]),
+        ("search / indexing",          ["search", "elastic", "index", "reindex"]),
+    ]
+
+    def _detect_family(inc: dict) -> str:
+        # Try failure_mode field first
+        mode = (inc.get("failure_mode") or "").strip().lower()
+        if mode and mode != "unknown":
+            return mode
+
+        # Fallback: keyword match on title + error_message
+        haystack = " ".join([
+            (inc.get("title") or ""),
+            (inc.get("error_message") or ""),
+            (inc.get("root_cause") or ""),
+        ]).lower()
+
+        for family, keywords in _FAILURE_KEYWORDS:
+            if any(kw in haystack for kw in keywords):
+                return family
+
+        return "other"
+
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for inc in incidents:
+        family = _detect_family(inc)
+        groups[family].append(inc)
+
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    patterns = []
+    for mode, incs in groups.items():
+        severities   = [i.get("severity", "medium") for i in incs]
+        services     = sorted({i.get("service") for i in incs if i.get("service")})
+        dates        = sorted([i.get("date") for i in incs if i.get("date")], reverse=True)
+        top_severity = min(severities, key=lambda s: severity_order.get(s, 99))
+
+        samples = [
+            {
+                "id":       i.get("id"),
+                "title":    i.get("title"),
+                "date":     i.get("date"),
+                "severity": i.get("severity"),
+                "service":  i.get("service"),
+                "fix":      i.get("fix"),
+            }
+            for i in incs[:3]
+        ]
+
+        patterns.append({
+            "failure_mode":      mode,
+            "count":             len(incs),
+            "top_severity":      top_severity,
+            "affected_services": services,
+            "latest_date":       dates[0] if dates else None,
+            "samples":           samples,
+        })
+
+    patterns.sort(key=lambda x: x["count"], reverse=True)
+
+    return {
+        "patterns":        patterns[:top_k],
+        "total_incidents": len(incidents),
+        "total_patterns":  len(patterns),
+    }
 
 
 # ── Webhook: PagerDuty ingest ─────────────────────────────────────────────────
