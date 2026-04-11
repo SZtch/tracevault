@@ -109,6 +109,26 @@ export function UploadIcon({ className = 'w-4 h-4' }) {
   )
 }
 
+export function TrashIcon({ className = 'w-4 h-4', style }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4,6 16,6" />
+      <path d="M7 6V4h6v2" />
+      <path d="M5 6l1 11h8l1-11" />
+      <line x1="9" y1="10" x2="9" y2="14" />
+      <line x1="11" y1="10" x2="11" y2="14" />
+    </svg>
+  )
+}
+
+export function EditIcon({ className = 'w-4 h-4', style }) {
+  return (
+    <svg className={className} style={style} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13.5 3.5l3 3L7 16H4v-3L13.5 3.5z" />
+    </svg>
+  )
+}
+
 export function ShieldIcon({ className = 'w-4 h-4', style }) {
   return (
     <svg className={className} style={style} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">

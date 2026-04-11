@@ -374,6 +374,67 @@ curl -X POST http://localhost:8000/webhooks/pagerduty \
 
 ---
 
+## Incident management
+
+### Delete an incident
+
+Remove an incorrectly indexed incident or duplicate by ID.
+
+```bash
+curl -X DELETE http://localhost:8000/incidents/INC-001
+```
+
+Response:
+```json
+{ "incident_id": "INC-001", "deleted": true, "message": "Incident 'INC-001' deleted from index." }
+```
+
+Returns `404` if the incident is not found.
+
+---
+
+### Update incident fields
+
+Add postmortem data or correct fields after an incident closes. Only provided fields are changed. The search vector is automatically re-embedded from the updated content.
+
+```bash
+curl -X PATCH http://localhost:8000/incidents/INC-001 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "root_cause": "HikariCP max-pool-size set to 10 — too low for peak traffic.",
+    "fix": "Increased max-pool-size to 30, added connection timeout alert.",
+    "tags": ["connection-pool", "hikari", "performance"]
+  }'
+```
+
+Editable fields: `title`, `service`, `component`, `severity`, `date`, `error_message`, `root_cause`, `fix`, `stack_trace`, `tags`.
+
+Response:
+```json
+{ "incident_id": "INC-001", "updated_fields": ["root_cause", "fix", "tags"], "message": "Incident 'INC-001' updated and re-embedded." }
+```
+
+---
+
+### Deduplication
+
+By default, indexing the same incident ID twice overwrites the existing entry (safe for re-indexing). To skip incidents that already exist, pass `skip_duplicates: true`:
+
+```bash
+curl -X POST http://localhost:8000/index \
+  -H 'Content-Type: application/json' \
+  -d '{"incidents": [...], "skip_duplicates": true}'
+```
+
+All index responses now include dedup metadata:
+```json
+{ "indexed": 3, "skipped": 2, "duplicate_ids": ["INC-001", "INC-005"], "status": "ok" }
+```
+
+Webhooks (Slack, PagerDuty) always use `skip_duplicates: true` automatically — a webhook triggered twice for the same incident ID indexes only once.
+
+---
+
 ## Environment variables
 
 | Variable | Where | Default | Description |
