@@ -52,7 +52,7 @@ COPY backend/ ./
 # Pre-download the sentence-transformers embedding model (~90MB) at build time
 # so Railway restarts and cold starts never re-download it at runtime.
 # The model is cached to the default HuggingFace cache dir inside the image.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" || true
 
 # Bake sample data into image — api.py resolves Path(__file__).parent.parent / "data"
 # = /app/../data = /data when running from /app
