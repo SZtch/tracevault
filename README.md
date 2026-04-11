@@ -286,6 +286,13 @@ Or use the Index tab in the frontend.
 | `/index` | POST | Index incidents from request body |
 | `/search` | POST | Semantic search with match explanation |
 | `/webhooks/pagerduty` | POST | Ingest a PagerDuty incident webhook (V2 and V3 auto-detected) |
+| `/webhooks/slack` | POST | Ingest a Slack alert webhook and index it |
+| `/incidents/{id}` | PATCH | Update editable fields on an existing incident and re-embed |
+| `/incidents/{id}` | DELETE | Remove an incident from the index by ID |
+| `/incidents/{id}/resolve` | PATCH | Mark an incident resolved and optionally confirm the fix |
+| `/analytics/dashboard` | GET | Aggregated severity, service, and resolution metrics |
+| `/analytics/recurring` | GET | Detect recurring failure patterns across indexed incidents |
+| `/analytics/resolutions` | GET | Summarise confirmed fix patterns across resolved incidents |
 
 ### Search request
 
