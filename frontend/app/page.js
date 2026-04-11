@@ -141,7 +141,7 @@ export default function Home() {
           ].map(({ id, Icon, label }) => (
             <button
               key={id}
-              onClick={() => { setView(id); if (id === 'index') setTriageBrief(null) }}
+              onClick={() => { setView(id); if (id !== 'search') setTriageBrief(null) }}
               className={[
                 'flex items-center gap-1.5 px-3 py-1.5 rounded font-mono text-xs tracking-wide border transition-all duration-150',
                 view === id
