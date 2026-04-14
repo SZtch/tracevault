@@ -1,0 +1,401 @@
+[
+  {
+    "id": "eval-001",
+    "cluster": "connection_pool",
+    "query": "hikari pool exhausted, connection not available after 30 seconds",
+    "expected_top_1": "INC-001",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-001",
+      "INC-013",
+      "INC-019"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-002",
+    "cluster": "connection_pool",
+    "query": "payment service can't get db connection during flash sale, pool stats active 20 idle 0",
+    "expected_top_1": "INC-013",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-013",
+      "INC-001",
+      "INC-019"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-003",
+    "cluster": "connection_pool",
+    "query": "postgres max_connections exceeded, all services getting connection errors",
+    "expected_top_1": "INC-014",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-014",
+      "INC-001",
+      "INC-013"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-004",
+    "cluster": "connection_pool",
+    "query": "HikariPool connection leak after ORM upgrade, idle timeout exceeded",
+    "expected_top_1": "INC-017",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-017",
+      "INC-001",
+      "INC-013"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-005",
+    "cluster": "connection_pool",
+    "query": "billing service db pool exhausted during invoice batch run, competing with live traffic",
+    "expected_top_1": "INC-019",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-019",
+      "INC-013",
+      "INC-001"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-006",
+    "cluster": "connection_pool",
+    "query": "SQLAlchemy QueuePool limit overflow, reporting service timing out on concurrent queries",
+    "expected_top_1": "INC-041",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-041",
+      "INC-001",
+      "INC-017"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-007",
+    "cluster": "connection_pool",
+    "query": "database connections maxed out, pool size too small for traffic spike, need to increase pool",
+    "expected_top_1": null,
+    "expected_any_top_1": [
+      "INC-001",
+      "INC-013"
+    ],
+    "expected_in_top_3": [
+      "INC-001",
+      "INC-013",
+      "INC-014"
+    ],
+    "note": "Ambiguous top-1: both INC-001 and INC-013 share identical HikariCP error and traffic-spike root cause. No service context in query to break the tie."
+  },
+  {
+    "id": "eval-008",
+    "cluster": "grpc_timeout",
+    "query": "gRPC deadline exceeded on ML service, inference not responding under load",
+    "expected_top_1": null,
+    "expected_any_top_1": [
+      "INC-009",
+      "INC-026"
+    ],
+    "expected_in_top_3": [
+      "INC-009",
+      "INC-026",
+      "INC-040"
+    ],
+    "note": "Ambiguous top-1: 'deadline exceeded' keyword matches INC-009 (recommendation-service), but 'ML service' as literal service name matches INC-026 (service=ml-service). Either is a valid top-1."
+  },
+  {
+    "id": "eval-009",
+    "cluster": "grpc_timeout",
+    "query": "StatusCode DEADLINE_EXCEEDED inventory availability check, 500ms deadline",
+    "expected_top_1": "INC-021",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-021",
+      "INC-009",
+      "INC-026"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-010",
+    "cluster": "grpc_timeout",
+    "query": "recommendation service timing out, deadline exceeded, returning empty results",
+    "expected_top_1": "INC-009",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-009",
+      "INC-040",
+      "INC-021"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-011",
+    "cluster": "grpc_timeout",
+    "query": "grpc all subchannels in transient failure state, channel exhaustion",
+    "expected_top_1": "INC-026",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-026",
+      "INC-009",
+      "INC-021"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-012",
+    "cluster": "grpc_timeout",
+    "query": "personalization service 68% of requests failing after new model deployment",
+    "expected_top_1": "INC-040",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-040",
+      "INC-009",
+      "INC-026"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-013",
+    "cluster": "grpc_timeout",
+    "query": "ML model cold start causing latency spike, warmup period not handled, deadlines too tight",
+    "expected_top_1": "INC-040",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-040",
+      "INC-009",
+      "INC-026"
+    ],
+    "note": "Cold-start phrasing is specific to INC-040 root cause (45s model warmup). Not ambiguous \u2014 used to validate semantic bridging from symptom description to underlying deadline failure."
+  },
+  {
+    "id": "eval-014",
+    "cluster": "queue_backlog",
+    "query": "kafka consumer lag growing, batch jobs falling behind, 800k messages unprocessed",
+    "expected_top_1": "INC-036",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-036",
+      "INC-011",
+      "INC-030"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-015",
+    "cluster": "queue_backlog",
+    "query": "kafka consumer group rebalancing during deploy, all consumers paused, lag growing",
+    "expected_top_1": "INC-030",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-030",
+      "INC-011",
+      "INC-036"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-016",
+    "cluster": "queue_backlog",
+    "query": "kafka consumer stopped processing, schema change in producer broke deserialization",
+    "expected_top_1": "INC-011",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-011",
+      "INC-036",
+      "INC-030"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-017",
+    "cluster": "queue_backlog",
+    "query": "rabbitmq queue depth 1.8 million, consumers stopped, messages expiring",
+    "expected_top_1": "INC-031",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-031",
+      "INC-011",
+      "INC-039"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-018",
+    "cluster": "queue_backlog",
+    "query": "celery worker stuck on one task, entire queue backed up 4000 pending tasks",
+    "expected_top_1": "INC-032",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-032",
+      "INC-035",
+      "INC-039"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-019",
+    "cluster": "queue_backlog",
+    "query": "SQS queue depth alarm, file processing 6 hours behind, messages not consumed",
+    "expected_top_1": "INC-033",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-033",
+      "INC-032",
+      "INC-035"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-020",
+    "cluster": "queue_backlog",
+    "query": "email queue backed up 45k messages, workers not keeping up",
+    "expected_top_1": "INC-039",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-039",
+      "INC-031",
+      "INC-023"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-021",
+    "cluster": "queue_backlog",
+    "query": "nightly ETL job running 4x longer than expected, downstream reports blocked",
+    "expected_top_1": "INC-045",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-045",
+      "INC-036",
+      "INC-034"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-022",
+    "cluster": "memory_oom",
+    "query": "analytics worker OOMKilled, pod keeps restarting, exit code 137",
+    "expected_top_1": "INC-004",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-004",
+      "INC-034",
+      "INC-037"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-023",
+    "cluster": "memory_oom",
+    "query": "java heap space OutOfMemoryError, image processing worker crashing",
+    "expected_top_1": "INC-002",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-002",
+      "INC-043",
+      "INC-037"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-024",
+    "cluster": "memory_oom",
+    "query": "container memory usage near limit, GC pauses 12 seconds, response times 8s",
+    "expected_top_1": "INC-037",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-037",
+      "INC-004",
+      "INC-034"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-025",
+    "cluster": "memory_oom",
+    "query": "batch analytics job OOMKilled at 67% completion, loading too much data at once",
+    "expected_top_1": "INC-034",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-034",
+      "INC-004",
+      "INC-037"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-026",
+    "cluster": "memory_oom",
+    "query": "PDF rendering worker OOMKilled every week, memory leak not releasing resources",
+    "expected_top_1": "INC-043",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-043",
+      "INC-002",
+      "INC-034"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-027",
+    "cluster": "upstream_cascade",
+    "query": "checkout keeps getting 504s, payment provider timing out, cascade failure",
+    "expected_top_1": "INC-022",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-022",
+      "INC-044",
+      "INC-024"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-028",
+    "cluster": "upstream_cascade",
+    "query": "retry storm overloading external email API, 503 back, queue depth 280k",
+    "expected_top_1": "INC-023",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-023",
+      "INC-006",
+      "INC-028"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-029",
+    "cluster": "upstream_cascade",
+    "query": "circuit breaker stuck open, service returning stale cached data from 6 hours ago",
+    "expected_top_1": "INC-025",
+    "expected_any_top_1": null,
+    "expected_in_top_3": [
+      "INC-025",
+      "INC-022",
+      "INC-027"
+    ],
+    "note": null
+  },
+  {
+    "id": "eval-030",
+    "cluster": "upstream_cascade",
+    "query": "nginx 504 gateway timeout on search endpoint, elasticsearch upstream slow",
+    "expected_top_1": null,
+    "expected_any_top_1": [
+      "INC-044",
+      "INC-024"
+    ],
+    "expected_in_top_3": [
+      "INC-044",
+      "INC-024",
+      "INC-022"
+    ],
+    "note": "Ambiguous top-1: INC-044 and INC-024 share the same service (api-gateway), same error pattern (upstream timed out), and same root cause (Elasticsearch slowness). Either is a valid top-1."
+  }
+]
