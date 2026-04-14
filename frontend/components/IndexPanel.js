@@ -154,7 +154,7 @@ export default function IndexPanel() {
       const res  = await fetch(`${API}/incidents/${encodeURIComponent(id)}`, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`)
-      setDelResult({ ok: true, msg: `Incident '${id}' deleted from index.` }); setManageId('')
+      setDelResult({ ok: true, msg: `Incident '${id}' deleted from index.` }); setManageId(''); setIncidents(prev => prev.filter(i => i.incident_id !== id))
     } catch (e) { setDelResult({ ok: false, msg: e.message }) }
     finally { setDelLoading(false) }
   }
