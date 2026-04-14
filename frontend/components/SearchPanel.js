@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { SearchIcon, ZapIcon } from '@/components/Icons'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -18,6 +18,50 @@ export default function SearchPanel({
   const [services,   setServices]   = useState([])
   const [severities, setSeverities] = useState([])
   const [showFilters, setShowFilters] = useState(false)
+  const [fileError,   setFileError]   = useState(null)
+  const fileRef = useRef()
+
+  const [extracting, setExtracting] = useState(false)
+
+  async function handleFileAttach(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileError(null)
+    e.target.value = ''
+
+    const isImage = file.type.startsWith('image/')
+
+    if (isImage) {
+      // ── Vision extraction path ──────────────────────────────────────
+      if (file.size > 5 * 1024 * 1024) {
+        setFileError('Image too large — max 5MB.')
+        return
+      }
+      setExtracting(true)
+      try {
+        const form = new FormData()
+        form.append('file', file)
+        const res  = await fetch(`${API}/extract-from-image`, { method: 'POST', body: form })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.detail || 'Extraction failed')
+        setQuery(data.extracted_text || '')
+      } catch (err) {
+        setFileError(err.message || 'Could not extract text from image.')
+      } finally {
+        setExtracting(false)
+      }
+    } else {
+      // ── Plain text path ─────────────────────────────────────────────
+      if (file.size > 500 * 1024) {
+        setFileError('File too large — max 500KB. Paste a relevant excerpt instead.')
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = ev => setQuery((ev.target.result || '').slice(0, 5000))
+      reader.onerror = () => setFileError('Could not read file.')
+      reader.readAsText(file)
+    }
+  }
 
   useEffect(() => {
     async function loadMeta() {
@@ -137,12 +181,21 @@ export default function SearchPanel({
         >
           <div className="flex items-center gap-4">
             <button
-              onClick={() => setShowFilters(p => !p)}
-              className="flex items-center gap-1.5 font-mono text-[10px] transition-colors"
-              style={{ color: showFilters ? 'var(--accent)' : 'var(--text-dim)' }}
+              onClick={() => fileRef.current?.click()}
+              disabled={extracting}
+              className="flex items-center gap-1.5 font-mono text-[10px] transition-colors disabled:opacity-50"
+              style={{ color: extracting ? 'var(--accent)' : 'var(--text-dim)' }}
+              title="Attach a log/text file or screenshot"
             >
-              <span>⊕</span> Attach Log File
+              <span>⊕</span> {extracting ? 'Extracting…' : 'Attach File'}
             </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".log,.txt,.json,.out,.trace,image/png,image/jpeg,image/webp,image/gif"
+              className="file-input-hidden"
+              onChange={handleFileAttach}
+            />
             <button
               onClick={() => setShowFilters(p => !p)}
               className="flex items-center gap-1.5 font-mono text-[10px] transition-colors"
@@ -213,6 +266,17 @@ export default function SearchPanel({
               spellCheck={false}
             />
           </div>
+        </div>
+      )}
+
+      {/* File attach error */}
+      {fileError && (
+        <div
+          className="flex items-start gap-2 mt-3 px-3.5 py-2.5 rounded-md text-sm"
+          style={{ background: 'var(--danger-dim)', border: '1px solid var(--danger-border)', color: 'var(--danger)' }}
+        >
+          <span className="flex-shrink-0 mt-px">⚠</span>
+          <span>{fileError}</span>
         </div>
       )}
 

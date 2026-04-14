@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { DatabaseIcon, UploadIcon, CheckIcon, AlertIcon, TrashIcon, EditIcon } from '@/components/Icons'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -46,6 +46,48 @@ function Field({ label, value, onChange, placeholder, as = 'input' }) {
   )
 }
 
+function IncidentSelect({ label, value, onChange, incidents, placeholder }) {
+  const selectStyle = {
+    background:   'var(--bg-4)',
+    borderColor:  'var(--border)',
+    color:        value ? 'var(--text-bright)' : 'var(--text-dim)',
+    width:        '100%',
+    fontFamily:   'var(--sans)',
+  }
+  const cls = 'text-sm px-3 py-2 rounded-md border transition-colors duration-150 outline-none focus:border-[var(--accent)]'
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="font-mono text-[9px] font-semibold tracking-widest uppercase" style={{ color: 'var(--text-dim)' }}>
+        {label}
+      </span>
+      {incidents.length > 0 ? (
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className={cls}
+          style={selectStyle}
+        >
+          <option value="">— select an incident —</option>
+          {incidents.map(inc => (
+            <option key={inc.incident_id} value={inc.incident_id}>
+              {inc.incident_id} · {inc.title.slice(0, 55)}{inc.title.length > 55 ? '…' : ''}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          className={cls}
+          style={{ ...selectStyle, color: 'var(--text-bright)' }}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function IndexPanel() {
   const [loading,    setLoading]    = useState(false)
   const [result,     setResult]     = useState(null)
@@ -62,6 +104,21 @@ export default function IndexPanel() {
   const [updTags,      setUpdTags]      = useState('')
   const [updResult,    setUpdResult]    = useState(null)
   const [updLoading,   setUpdLoading]   = useState(false)
+
+  const [incidents,    setIncidents]    = useState([])
+
+  useEffect(() => {
+    async function loadIncidents() {
+      try {
+        const res  = await fetch(`${API}/incidents`)
+        const data = await res.json()
+        setIncidents((data.incidents || []).sort((a, b) => a.incident_id.localeCompare(b.incident_id, undefined, { numeric: true })))
+      } catch {
+        // silently fail — text input still works
+      }
+    }
+    loadIncidents()
+  }, [])
 
   async function indexDefault() {
     setLoading(true); setResult(null)
@@ -200,7 +257,13 @@ export default function IndexPanel() {
           </p>
           <div className="flex gap-2 items-end">
             <div className="flex-1">
-              <Field label="Incident ID" value={manageId} onChange={setManageId} placeholder="e.g. INC-001" />
+              <IncidentSelect
+                label="Incident ID"
+                value={manageId}
+                onChange={setManageId}
+                incidents={incidents}
+                placeholder="e.g. INC-001"
+              />
             </div>
             <button
               onClick={deleteIncident} disabled={delLoading || !manageId.trim()} className={btnPrimary}
@@ -223,7 +286,13 @@ export default function IndexPanel() {
             Add postmortem data or correct fields. Only filled fields are updated. Vector is re-embedded automatically.
           </p>
           <div className="flex flex-col gap-3">
-            <Field label="Incident ID"          value={updId}        onChange={setUpdId}        placeholder="e.g. INC-001" />
+            <IncidentSelect
+              label="Incident ID"
+              value={updId}
+              onChange={setUpdId}
+              incidents={incidents}
+              placeholder="e.g. INC-001"
+            />
             <Field label="Root Cause"            value={updRootCause} onChange={setUpdRootCause} placeholder="What caused this incident?" as="textarea" />
             <Field label="Fix"                   value={updFix}       onChange={setUpdFix}       placeholder="What resolved it?" as="textarea" />
             <div className="flex gap-2">

@@ -375,6 +375,108 @@ def meta():
     return get_collection_meta()
 
 
+@app.get("/incidents")
+def list_incidents():
+    """Return all incident IDs and titles for frontend dropdowns (delete/update panels)."""
+    try:
+        incidents = get_all_incidents()
+        return {
+            "incidents": [
+                {
+                    "incident_id": i.get("incident_id"),
+                    "title":       i.get("title", ""),
+                    "severity":    i.get("severity", "medium"),
+                }
+                for i in incidents
+                if i.get("incident_id") and i.get("incident_id") != "UNKNOWN"
+            ]
+        }
+    except Exception as e:
+        raise _db_error(e)
+
+
+
+@app.post("/extract-from-image")
+async def extract_from_image(file: UploadFile = File(...)):
+    """
+    Accept an image file (PNG, JPG, WEBP, GIF) and use Claude Vision to extract
+    any error messages, stack traces, or log text visible in the screenshot.
+    Returns the extracted text ready to paste into the search box.
+    Requires ANTHROPIC_API_KEY.
+    """
+    from triage import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Image extraction requires ANTHROPIC_API_KEY — not configured on this instance.",
+        )
+
+    # Validate content type
+    ALLOWED = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+    content_type = file.content_type or ""
+    if content_type not in ALLOWED:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{content_type}'. Upload a PNG, JPG, WEBP, or GIF.",
+        )
+
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image too large — maximum 5MB.")
+
+    import base64
+    try:
+        import anthropic
+    except ImportError:
+        raise HTTPException(status_code=503, detail="anthropic package not installed.")
+
+    image_data = base64.standard_b64encode(content).decode("utf-8")
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=1000,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type":       "base64",
+                                "media_type": content_type,
+                                "data":       image_data,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Extract all error messages, exception names, stack trace lines, and log output "
+                                "visible in this screenshot. Output only the raw extracted text — no commentary, "
+                                "no formatting, no explanation. If there is no error or log content visible, "
+                                "output exactly: NO_ERROR_CONTENT_FOUND"
+                            ),
+                        },
+                    ],
+                }
+            ],
+        )
+        extracted = message.content[0].text.strip()
+        if extracted == "NO_ERROR_CONTENT_FOUND" or not extracted:
+            raise HTTPException(
+                status_code=422,
+                detail="No error or log content found in the image. Try a clearer screenshot.",
+            )
+        return {"extracted_text": extracted}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Image extraction failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+
+
 @app.post("/index")
 def index(req: IndexRequest):
     """
