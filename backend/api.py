@@ -633,12 +633,8 @@ def recurring_failures(top_k: int = 10):
     ]
 
     def _detect_family(inc: dict) -> str:
-        # Try failure_mode field first
-        mode = (inc.get("failure_mode") or "").strip().lower()
-        if mode and mode != "unknown":
-            return mode
-
-        # Fallback: keyword match on title + error_message
+        # failure_mode is computed dynamically during search, not stored in payload.
+        # Use keyword matching on title + error_message + root_cause.
         haystack = " ".join([
             (inc.get("title") or ""),
             (inc.get("error_message") or ""),
@@ -667,7 +663,7 @@ def recurring_failures(top_k: int = 10):
 
         samples = [
             {
-                "id":       i.get("id"),
+                "id":       i.get("incident_id"),
                 "title":    i.get("title"),
                 "date":     i.get("date"),
                 "severity": i.get("severity"),
@@ -731,12 +727,15 @@ def resolve_incident(incident_id: str, req: ResolveRequest):
         -H 'Content-Type: application/json' \\
         -d '{"resolution_status": "confirmed", "confirmed_fix": "Increased HikariCP pool size to 30", "resolved_by": "platform-team"}'
     """
-    found = update_incident_resolution(
-        incident_id       = incident_id,
-        resolution_status = req.resolution_status,
-        confirmed_fix     = req.confirmed_fix,
-        resolved_by       = req.resolved_by,
-    )
+    try:
+        found = update_incident_resolution(
+            incident_id       = incident_id,
+            resolution_status = req.resolution_status,
+            confirmed_fix     = req.confirmed_fix,
+            resolved_by       = req.resolved_by,
+        )
+    except Exception as e:
+        raise _db_error(e)
 
     if not found:
         raise HTTPException(
