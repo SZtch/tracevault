@@ -32,6 +32,7 @@ OLLAMA_URL        = os.getenv("OLLAMA_URL", "")
 OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "llama3")
 
 MAX_INCIDENTS_FOR_BRIEF = 5
+MAX_STACK_TRACE_CHARS   = 600  # keep prompt lean — top of trace is most informative
 
 # ── Prompt template ───────────────────────────────────────────────────────────
 
@@ -89,6 +90,8 @@ def _format_incidents(incidents: List[Dict[str, Any]]) -> str:
     """
     Convert retrieved incident dicts into a numbered plaintext block.
     Only operationally relevant fields are included to keep the prompt lean.
+    Stack trace is included (truncated) — it's the most precise signal for
+    root cause identification and often contains the exact exception class.
     """
     lines = []
     for i, inc in enumerate(incidents[:MAX_INCIDENTS_FOR_BRIEF], 1):
@@ -109,6 +112,10 @@ def _format_incidents(incidents: List[Dict[str, Any]]) -> str:
         if inc.get("tags"):
             tags = inc["tags"] if isinstance(inc["tags"], list) else []
             lines.append(f"Tags       : {', '.join(tags)}")
+        # Stack trace — top portion is most informative (exception class + call site)
+        stack = inc.get("stack_trace") or ""
+        if stack.strip():
+            lines.append(f"Stack trace: {stack.strip()[:MAX_STACK_TRACE_CHARS]}")
         lines.append("")
 
     return "\n".join(lines)
