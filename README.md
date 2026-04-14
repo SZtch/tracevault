@@ -29,6 +29,7 @@ Every search follows this flow:
 2. **VectorAI DB similarity search** — the vector is sent via gRPC to VectorAI DB, which runs HNSW cosine similarity across all indexed incidents. Optional filters (severity, service) are applied at this layer.
 3. **Matched historical incidents** — results come back with a structured match explanation: what matched, which field it came from, and what failure category it belongs to.
 4. **Optional triage brief** — generated from retrieved incidents only, using whichever provider you have: Anthropic (cloud) or Ollama (fully offline). Core retrieval runs without either.
+5. **Feedback loop** — when an engineer confirms a fix, it is stored back into VectorAI DB. Future searches for similar incidents automatically surface the proven fix. The index gets smarter with every resolved incident — no retraining required.
 
 VectorAI DB owns vector storage, the HNSW index, cosine search, and payload filtering. The FastAPI backend handles embedding and result enrichment. The Next.js frontend is a thin layer on top.
 

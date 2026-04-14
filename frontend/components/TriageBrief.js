@@ -60,98 +60,26 @@ export default function TriageBrief({ brief, loading, searched }) {
 /* ── Placeholder ── */
 function Placeholder() {
   return (
-    <div className="space-y-5">
-      {/* Bubble */}
-      <div
-        className="rounded-lg px-4 py-3.5 text-xs leading-relaxed"
-        style={{ background: 'var(--bg-3)', border: '1px solid var(--border)', color: 'var(--text-dim)' }}
-      >
-        I've analyzed the pasted trace. This appears to be a{' '}
-        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Resource Starvation</span>{' '}
-        issue affecting downstream IO.
+    <div className="flex flex-col gap-5 py-2">
+      <p className="text-[12px] leading-relaxed" style={{ color: 'var(--text-dim)' }}>
+        Run a search to generate an AI triage brief grounded in your historical incidents.
+      </p>
+      <div className="space-y-3">
+        {[
+          { label: 'Failure Family',        desc: 'What category of failure this matches' },
+          { label: 'Likely Cause',          desc: 'Most probable root cause from past incidents' },
+          { label: 'First Response Checks', desc: 'Action items sourced from resolved incidents' },
+          { label: 'Known Fix Pattern',     desc: 'Confirmed fixes from your incident history' },
+        ].map(({ label, desc }) => (
+          <div key={label} className="rounded-md px-3 py-2.5 border" style={{ background: 'var(--bg-3)', borderColor: 'var(--border)' }}>
+            <p className="font-mono text-[9px] tracking-widest uppercase mb-1" style={{ color: 'var(--text-faint)' }}>{label}</p>
+            <p className="text-[11px]" style={{ color: 'var(--text-dim)' }}>{desc}</p>
+          </div>
+        ))}
       </div>
-
-      <Section label="Failure Family">
-        <div className="flex flex-wrap gap-2">
-          {['Infrastructure', 'Network Latency'].map(t => (
-            <span
-              key={t}
-              className="font-mono text-[9px] px-2.5 py-1 rounded"
-              style={{ background: 'var(--bg-4)', border: '1px solid var(--border-bright)', color: 'var(--text-dim)' }}
-            >
-              {t}
-            </span>
-          ))}
-        </div>
-      </Section>
-
-      <Section label="Likely Cause">
-        <p className="text-[12.5px] leading-relaxed font-medium" style={{ color: 'var(--text-bright)' }}>
-          Upstream TCP keep-alive settings mismatch following the latest{' '}
-          <span className="font-mono text-[11px]" style={{ color: 'var(--accent)' }}>v2.4.1</span>{' '}
-          deployment.
-        </p>
-      </Section>
-
-      <Section label="First Response Checks">
-        <ol className="space-y-2.5">
-          {[
-            { text: 'Verify Redis replica health in US-EAST-1', done: true },
-            { text: 'Check VPC flow logs for packet drops',      done: false },
-            { text: 'Audit security group egress rules',          done: false },
-          ].map((item, i) => (
-            <CheckItem key={i} done={item.done}>{item.text}</CheckItem>
-          ))}
-        </ol>
-      </Section>
-
-      <Section label="Known Fix Pattern">
-        <blockquote
-          className="text-[11.5px] leading-relaxed italic px-3 py-2.5 rounded"
-          style={{ background: 'var(--bg-4)', borderLeft: '2px solid var(--accent)', color: 'var(--text-dim)' }}
-        >
-          "Apply the persistent-connection patch from incident #882."
-        </blockquote>
-        <button
-          className="mt-2 flex items-center gap-1 font-mono text-[9px] font-semibold transition-opacity hover:opacity-80"
-          style={{ color: 'var(--accent)' }}
-        >
-          Open Knowledge Base ↗
-        </button>
-      </Section>
-
-      {/* Cluster viz */}
-      <Section label="Cluster Visualization">
-        <div
-          className="rounded-lg overflow-hidden relative mb-2"
-          style={{ height: '88px', background: 'linear-gradient(135deg, var(--bg-4) 0%, #061018 100%)', border: '1px solid var(--border)' }}
-        >
-          {[[28,42],[54,22],[72,55],[44,68],[81,28],[18,72]].map(([x,y], i) => (
-            <div
-              key={i}
-              style={{
-                position:     'absolute',
-                left:         `${x}%`,
-                top:          `${y}%`,
-                width:        i < 2 ? '6px' : '4px',
-                height:       i < 2 ? '6px' : '4px',
-                borderRadius: '50%',
-                background:   i === 0 ? 'var(--accent)' : i < 3 ? 'var(--text-dim)' : 'var(--border-bright)',
-                boxShadow:    i === 0 ? '0 0 8px var(--accent-glow)' : 'none',
-              }}
-            />
-          ))}
-          <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.3 }}>
-            <line x1="28%" y1="42%" x2="54%" y2="22%" stroke="var(--border-bright)" strokeWidth="1" />
-            <line x1="54%" y1="22%" x2="72%" y2="55%" stroke="var(--border-bright)" strokeWidth="1" />
-            <line x1="28%" y1="42%" x2="44%" y2="68%" stroke="var(--border-bright)" strokeWidth="1" />
-            <line x1="72%" y1="55%" x2="81%" y2="28%" stroke="var(--accent)" strokeWidth="1" strokeDasharray="3,2" />
-          </svg>
-        </div>
-        <p className="font-mono text-[9px]" style={{ color: 'var(--text-faint)' }}>
-          Node health across 4 global regions.
-        </p>
-      </Section>
+      <p className="font-mono text-[9px]" style={{ color: 'var(--text-faint)' }}>
+        Requires ANTHROPIC_API_KEY. Grounded in retrieved incidents only — no hallucination.
+      </p>
     </div>
   )
 }
