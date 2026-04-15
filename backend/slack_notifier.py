@@ -175,7 +175,7 @@ def _print_to_terminal(
     if results:
         print("\n  Top matches:")
         for i, r in enumerate(results[:3], 1):
-            print(f"    {i}. {r.get('id','—')} ({r.get('score',0):.2f}) — {r.get('title','—')[:50]}")
+            print(f"    {i}. {r.get('incident_id','—')} ({r.get('score',0):.2f}) — {r.get('title','—')[:50]}")
 
     print("=" * 60 + "\n")
 
