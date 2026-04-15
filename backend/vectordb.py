@@ -758,13 +758,6 @@ def update_incident_resolution(
 
         point_id = stable_id(incident_id)
 
-        # Fetch the existing point to read current payload
-        results = client.points.search(
-            COLLECTION,
-            vector=[0.0] * DIM,
-            limit=1,
-            with_payload=True,
-        )
         # We need the actual payload — fetch by scrolling with early exit
         # (stable_id gives us the ID, but we still need the current payload
         #  to merge resolution fields without losing existing data)

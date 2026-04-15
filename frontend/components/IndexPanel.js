@@ -5,6 +5,14 @@ import { DatabaseIcon, UploadIcon, CheckIcon, AlertIcon, TrashIcon, EditIcon } f
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
+function detailMsg(detail, fallback) {
+  if (!detail) return fallback
+  if (typeof detail === 'string') return detail
+  if (detail.message) return detail.message
+  if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg
+  return fallback
+}
+
 function Card({ children }) {
   return (
     <div className="rounded-xl p-5 border" style={{ background: 'var(--bg-3)', borderColor: 'var(--border)' }}>
@@ -128,7 +136,7 @@ export default function IndexPanel() {
     try {
       const res  = await fetch(`${API}/index/default`, { method: 'POST' })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Index failed')
+      if (!res.ok) throw new Error(detailMsg(data.detail, 'Index failed'))
       const skip = data.skipped > 0 ? ` Skipped ${data.skipped} duplicate${data.skipped > 1 ? 's' : ''}.` : ''
       setResult({ ok: true, msg: `Indexed ${data.indexed} sample incidents.${skip}` })
       await loadIncidents()  // [P1-H FIX] refresh dropdown after index
@@ -144,7 +152,7 @@ export default function IndexPanel() {
       const form = new FormData(); form.append('file', file)
       const res  = await fetch(`${API}/index/file`, { method: 'POST', body: form })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Upload failed')
+      if (!res.ok) throw new Error(detailMsg(data.detail, 'Upload failed'))
       const skip = data.skipped > 0 ? ` Skipped ${data.skipped} duplicate${data.skipped > 1 ? 's' : ''}.` : ''
       setResult({ ok: true, msg: `Indexed ${data.indexed} incidents from ${file.name}.${skip}` })
       await loadIncidents()  // [P1-H FIX] refresh dropdown after file index

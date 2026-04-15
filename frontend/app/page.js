@@ -29,7 +29,7 @@ export default function Home() {
 
   function switchView(v) {
     setView(v)
-    if (v !== 'search') { setTriageBrief(null); setSearched(false) }
+    if (v !== 'search') { setTriageBrief(null); setSearched(false); setSearchError(null) }
   }
 
   return (
