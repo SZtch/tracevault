@@ -107,16 +107,19 @@ export default function IndexPanel() {
 
   const [incidents,    setIncidents]    = useState([])
 
-  useEffect(() => {
-    async function loadIncidents() {
-      try {
-        const res  = await fetch(`${API}/incidents`)
-        const data = await res.json()
-        setIncidents((data.incidents || []).sort((a, b) => a.incident_id.localeCompare(b.incident_id, undefined, { numeric: true })))
-      } catch {
-        // silently fail — text input still works
-      }
+  // [P1-H FIX] Extracted to component scope so indexDefault/indexFile can
+  // call it after a successful index to refresh the delete/update dropdowns.
+  async function loadIncidents() {
+    try {
+      const res  = await fetch(`${API}/incidents`)
+      const data = await res.json()
+      setIncidents((data.incidents || []).sort((a, b) => a.incident_id.localeCompare(b.incident_id, undefined, { numeric: true })))
+    } catch {
+      // silently fail — text input still works
     }
+  }
+
+  useEffect(() => {
     loadIncidents()
   }, [])
 
@@ -128,6 +131,7 @@ export default function IndexPanel() {
       if (!res.ok) throw new Error(data.detail || 'Index failed')
       const skip = data.skipped > 0 ? ` Skipped ${data.skipped} duplicate${data.skipped > 1 ? 's' : ''}.` : ''
       setResult({ ok: true, msg: `Indexed ${data.indexed} sample incidents.${skip}` })
+      await loadIncidents()  // [P1-H FIX] refresh dropdown after index
     } catch (e) { setResult({ ok: false, msg: `Error: ${e.message}` }) }
     finally { setLoading(false) }
   }
@@ -143,6 +147,7 @@ export default function IndexPanel() {
       if (!res.ok) throw new Error(data.detail || 'Upload failed')
       const skip = data.skipped > 0 ? ` Skipped ${data.skipped} duplicate${data.skipped > 1 ? 's' : ''}.` : ''
       setResult({ ok: true, msg: `Indexed ${data.indexed} incidents from ${file.name}.${skip}` })
+      await loadIncidents()  // [P1-H FIX] refresh dropdown after file index
     } catch (e) { setResult({ ok: false, msg: `Error: ${e.message}` }) }
     finally { setLoading(false); e.target.value = '' }
   }

@@ -201,7 +201,7 @@ export default function SearchPanel({
               className="flex items-center gap-1.5 font-mono text-[10px] transition-colors"
               style={{ color: showFilters ? 'var(--accent)' : 'var(--text-dim)' }}
             >
-              <span>↺</span> Recent Pastes
+              <span>⊞</span> {showFilters ? 'Hide Filters' : 'Filters'}
             </button>
           </div>
 

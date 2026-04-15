@@ -246,7 +246,7 @@ export default function Home() {
 
             {/* ── Right panel: Triage Brief ─────────────────────────── */}
             <div
-              className="hidden xl:flex flex-col w-72 flex-shrink-0 overflow-y-auto"
+              className="hidden lg:flex flex-col w-72 flex-shrink-0 overflow-y-auto"
               style={{ background: 'var(--bg-2)', borderLeft: '1px solid var(--border)' }}
             >
               <TriageBrief brief={triageBrief} loading={loading} searched={searched} />

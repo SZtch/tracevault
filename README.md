@@ -150,10 +150,20 @@ Create `frontend/.env.local` with:
 NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-**6. Index the sample dataset**
+**6. Verify data is indexed**
+
+The backend auto-indexes the 45-incident sample dataset on first boot (`AUTO_INDEX_DEFAULT=true` is set in docker-compose). Check it worked:
+
+```bash
+curl http://localhost:8000/health
+# → {"connected": true, "collection_exists": true, "incident_count": 45, "status_hint": "Ready — collection indexed and searchable.", ...}
+```
+
+If `incident_count` is 0 or `collection_exists` is false (e.g. you set `AUTO_INDEX_DEFAULT=false`), seed manually:
+
 ```bash
 curl -X POST http://localhost:8000/index/default
-# → {"indexed": 45, "skipped": 0, "duplicate_ids": [], "source": "sample_dataset", "status": "ok"}
+# → {"indexed": 45, "skipped": 0, "source": "sample_dataset", "status": "ok"}
 ```
 
 **7. Open the app**
@@ -345,6 +355,11 @@ TraceVault can ingest incidents directly from PagerDuty via webhook — no manua
    - **Events**: at minimum `incident.triggered`
 2. Save — PagerDuty shows a signing secret (optional, not required for TraceVault)
 3. Trigger a test incident — check `/health` to confirm `incident_count` increased
+
+> **Security note:** Webhook endpoints (`/webhooks/pagerduty`, `/webhooks/slack`) do not
+> validate request signatures. This is intentional for demo and evaluation use.
+> Production deployments should add `X-PagerDuty-Signature` / Slack signing secret
+> verification before exposing these endpoints publicly.
 
 ### What gets indexed
 

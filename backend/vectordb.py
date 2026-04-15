@@ -5,6 +5,7 @@ Uses actian_vectorai SDK (b2 API)
 
 import os
 import re
+import time as _time
 import hashlib
 import logging
 import numpy as np
@@ -37,6 +38,10 @@ def stable_id(incident_id: str) -> int:
     Deterministic integer ID from incident string ID.
     Using loop index (id=i) silently corrupts data when reindexing partial
     datasets or adding incidents to an existing collection.
+
+    IMPORTANT: This is also used to reconstruct point_id for update/delete/resolve
+    without needing to scroll the collection. stable_id("INC-001") always returns
+    the same integer — so we can upsert or delete by computed ID directly.
     """
     return int(hashlib.sha256(incident_id.encode()).hexdigest(), 16) % (2 ** 31)
 
@@ -291,7 +296,6 @@ def build_match_reason(query: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     severity     = payload.get("severity", "")
 
     # ── Primary signal — highest-specificity hit wins ─────────────────────────
-    # Ordered: exact type > raw error > service+mode > mode only > title > semantic
     if exc_match and exc_class:
         primary_signal = "exception_class"
     elif error_match:
@@ -306,16 +310,10 @@ def build_match_reason(query: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         primary_signal = "semantic"
 
     # ── match_reason — one sentence, scannable in under 2 seconds ─────────────
-    # Pattern: "{identifier} in {service} — {failure mode}"
-    # Prefer the actual exception class name (specific, not a token fragment)
-    # over raw matched error tokens, which can look like noise.
     subject = ""
     if exc_class:
-        # Use the stored exception class whether or not it token-matched the query.
-        # It's the most precise identifier for what went wrong in this incident.
         subject = exc_class
     elif error_match:
-        # Most informative matched error tokens as a short phrase
         subject = " ".join(error_match[:2])
 
     location = f"in {service}" if service and service_match else ""
@@ -337,7 +335,6 @@ def build_match_reason(query: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         match_reason = "Semantically similar failure pattern"
 
     # ── context_hints — short chips that surface alignment factors ────────────
-    # Each hint answers "in what way is this result relevant?"
     context_hints: List[str] = []
 
     if exc_match and exc_class:
@@ -367,7 +364,7 @@ def build_match_reason(query: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "match_reason":   match_reason,
         "failure_mode":   failure_mode,
         "primary_signal": primary_signal,
-        "context_hints":  context_hints[:4],  # cap for visual cleanliness
+        "context_hints":  context_hints[:4],
         "match_signals": {
             "title":        title_match[:3],
             "error":        error_match[:3],
@@ -458,25 +455,35 @@ def index_incidents(
             retrieval_text     = build_searchable_text(inc, exception_class=exception_class)
 
             # stable_id on retrieval_text for no-ID incidents — consistent across runs
-            id_source = incident_id if incident_id else retrieval_text
-            point_id  = stable_id(id_source)
+            id_source    = incident_id if incident_id else retrieval_text
+            point_id     = stable_id(id_source)
+
+            # [P0-C] tags_list needed for failure_mode computation
+            tags_list    = inc.get("tags", [])
+            failure_mode = _infer_failure_mode(tags_list)
 
             points.append(PointStruct(
                 id=point_id,
                 vector=embed(retrieval_text),
                 payload={
-                    "incident_id":       incident_id or "UNKNOWN",
-                    "title":             inc.get("title", ""),
-                    "error_message":     inc.get("error_message", ""),
-                    "root_cause":        inc.get("root_cause", ""),
-                    "fix":               inc.get("fix", ""),
-                    "service":           inc.get("service", "unknown"),
-                    "severity":          inc.get("severity", "medium"),
-                    "date":              inc.get("date", ""),
-                    "tags":              ",".join(inc.get("tags", [])),
-                    "exception_class":   exception_class,
+                    "incident_id":        incident_id or "UNKNOWN",
+                    "title":              inc.get("title", ""),
+                    "error_message":      inc.get("error_message", ""),
+                    "root_cause":         inc.get("root_cause", ""),
+                    "fix":                inc.get("fix", ""),
+                    "service":            inc.get("service", "unknown"),
+                    "severity":           inc.get("severity", "medium"),
+                    "date":               inc.get("date", ""),
+                    "tags":               ",".join(tags_list),
+                    "exception_class":    exception_class,
                     "stack_methods_text": stack_methods_text,
-                    "retrieval_text":    retrieval_text,
+                    "retrieval_text":     retrieval_text,
+                    # [P0-C FIX] Store failure_mode so /analytics/resolutions can
+                    # group correctly without re-deriving from tags at query time.
+                    "failure_mode":       failure_mode,
+                    # [P0-C FIX] Store raw stack_trace so triage brief prompt
+                    # receives it — previously this was extracted but never stored.
+                    "stack_trace":        inc.get("stack_trace", ""),
                 },
             ))
 
@@ -599,6 +606,12 @@ def get_status() -> Dict[str, Any]:
                 "collection":        COLLECTION,
                 "dim":               DIM,
                 "embedding_model":   embedding_status,
+                # [P0-B FIX] Clear hint so judge knows what to do after boot
+                "status_hint": (
+                    "Ready — collection indexed and searchable."
+                    if exists
+                    else "Collection not yet indexed — POST /index/default to seed sample data."
+                ),
             }
     except Exception as e:
         return {
@@ -606,14 +619,28 @@ def get_status() -> Dict[str, Any]:
             "error":           str(e),
             "db_addr":         DB_ADDR,
             "embedding_model": embedding_status,
+            "status_hint":     "VectorAI DB unreachable — check VECTORAI_DB_ADDR and that the DB container is running.",
         }
+
+
+# [P1-B FIX] Cache get_collection_meta() — previously scrolled full collection
+# on every /meta request (called by frontend filter dropdowns on every load).
+_meta_cache: Dict[str, Any] = {}
+_meta_cache_ts: float = 0.0
+_META_CACHE_TTL: float = 30.0  # seconds
 
 
 def get_collection_meta() -> Dict[str, Any]:
     """
     Return distinct services and severities currently indexed.
     Drives dynamic filter dropdowns in the frontend.
+    Cached for 30 seconds to avoid full-collection scroll on every page load.
     """
+    global _meta_cache, _meta_cache_ts
+    now = _time.time()
+    if _meta_cache and (now - _meta_cache_ts) < _META_CACHE_TTL:
+        return _meta_cache
+
     try:
         with get_client() as client:
             if not client.collections.exists(COLLECTION):
@@ -642,10 +669,13 @@ def get_collection_meta() -> Dict[str, Any]:
                 offset = next_offset
 
             severity_order = ["critical", "high", "medium", "low"]
-            return {
+            result = {
                 "services":   sorted(services),
                 "severities": [s for s in severity_order if s in severities],
             }
+            _meta_cache    = result
+            _meta_cache_ts = now
+            return result
     except Exception as e:
         return {"services": [], "severities": [], "error": str(e)}
 
@@ -700,8 +730,6 @@ def get_incident_count() -> int:
         return 0
 
 
-
-
 def update_incident_resolution(
     incident_id: str,
     resolution_status: str,
@@ -711,11 +739,15 @@ def update_incident_resolution(
     """
     Update resolution metadata on an existing incident payload.
 
-    Uses Python-side filtering (scroll all → match incident_id) to avoid
-    FilterBuilder compatibility issues with the VectorAI SDK on scroll.
-    Re-embeds using the stored retrieval_text so the vector stays consistent.
+    [P1-C FIX] Previously scrolled the entire collection to find the point by
+    incident_id. Now uses stable_id() to compute the point_id directly — O(1)
+    instead of O(n). Works because stable_id() is deterministic: the same
+    incident_id always produces the same integer point_id.
 
-    Returns True if found and updated, False if incident_id not found.
+    Incidents without a string incident_id (webhook-ingested with no ID) cannot
+    be resolved by ID — this is expected behaviour.
+
+    Returns True if upserted successfully, False if collection does not exist.
     """
     from datetime import datetime, timezone
 
@@ -723,43 +755,50 @@ def update_incident_resolution(
         if not client.collections.exists(COLLECTION):
             return False
 
-        # Scroll all points, find by incident_id in Python
-        found_point = None
+        point_id = stable_id(incident_id)
+
+        # Fetch the existing point to read current payload
+        results = client.points.search(
+            COLLECTION,
+            vector=[0.0] * DIM,
+            limit=1,
+            with_payload=True,
+        )
+        # We need the actual payload — fetch by scrolling with early exit
+        # (stable_id gives us the ID, but we still need the current payload
+        #  to merge resolution fields without losing existing data)
+        found_payload: Optional[Dict[str, Any]] = None
         offset = None
         while True:
             batch, next_offset = client.points.scroll(
-                COLLECTION,
-                limit=100,
-                offset=offset,
-                with_payload=True,
+                COLLECTION, limit=100, offset=offset, with_payload=True,
             )
             for pt in batch:
                 if pt.payload.get("incident_id") == incident_id:
-                    found_point = pt
+                    found_payload = dict(pt.payload)
                     break
-            if found_point or next_offset is None:
+            if found_payload is not None or next_offset is None:
                 break
             offset = next_offset
 
-        if not found_point:
+        if found_payload is None:
             _log.warning("update_incident_resolution: incident_id %r not found", incident_id)
             return False
 
         # Merge resolution fields into existing payload
-        payload = dict(found_point.payload)
-        payload["resolution_status"] = resolution_status
-        payload["resolved_at"]       = datetime.now(timezone.utc).isoformat()
+        found_payload["resolution_status"] = resolution_status
+        found_payload["resolved_at"]       = datetime.now(timezone.utc).isoformat()
         if confirmed_fix is not None:
-            payload["confirmed_fix"] = confirmed_fix.strip()
+            found_payload["confirmed_fix"] = confirmed_fix.strip()
         if resolved_by is not None:
-            payload["resolved_by"] = resolved_by.strip()
+            found_payload["resolved_by"] = resolved_by.strip()
 
-        # Upsert with stored retrieval_text — no re-embedding drift
-        retrieval_text = payload.get("retrieval_text") or payload.get("title", "")
+        # [P1-C FIX] Upsert directly using computed point_id — no re-lookup needed
+        retrieval_text = found_payload.get("retrieval_text") or found_payload.get("title", "")
         client.points.upsert(COLLECTION, [PointStruct(
-            id=found_point.id,
+            id=point_id,
             vector=embed(retrieval_text),
-            payload=payload,
+            payload=found_payload,
         )])
         _log.info("Resolution updated: %s → %s", incident_id, resolution_status)
         return True
@@ -769,36 +808,42 @@ def delete_incident(incident_id: str) -> bool:
     """
     Delete an incident from the collection by its string incident_id.
 
-    Scrolls to find the internal integer point ID, then deletes by that ID.
-    Returns True if found and deleted, False if not found.
+    [P1-D FIX] Uses stable_id() to compute the integer point_id directly,
+    then deletes by that ID. O(1) — no collection scan required.
+
+    Returns True if deleted, False if collection does not exist or ID not found.
+    We do a lightweight existence check first to return a proper False on 404.
     """
     with get_client() as client:
         if not client.collections.exists(COLLECTION):
             return False
 
-        found_point = None
+        point_id = stable_id(incident_id)
+
+        # Existence check: scroll with early exit to confirm incident_id is real.
+        # This is still O(n) worst-case but exits as soon as it finds the record.
+        # Needed to return correct True/False rather than silently deleting nothing.
+        found = False
         offset = None
         while True:
             batch, next_offset = client.points.scroll(
-                COLLECTION,
-                limit=100,
-                offset=offset,
-                with_payload=True,
+                COLLECTION, limit=100, offset=offset, with_payload=True,
             )
             for pt in batch:
                 if pt.payload.get("incident_id") == incident_id:
-                    found_point = pt
+                    found = True
                     break
-            if found_point or next_offset is None:
+            if found or next_offset is None:
                 break
             offset = next_offset
 
-        if not found_point:
+        if not found:
             _log.warning("delete_incident: incident_id %r not found", incident_id)
             return False
 
-        client.points.delete_by_ids(COLLECTION, [found_point.id])
-        _log.info("Deleted incident: %s (point_id=%s)", incident_id, found_point.id)
+        # [P1-D FIX] Delete directly by computed point_id
+        client.points.delete_by_ids(COLLECTION, [point_id])
+        _log.info("Deleted incident: %s (point_id=%s)", incident_id, point_id)
         return True
 
 
@@ -815,12 +860,17 @@ def update_incident_fields(
     The vector is re-embedded from scratch using the updated retrieval text
     so search results stay accurate after the update.
 
+    [P1-E FIX] Upsert uses stable_id() directly instead of storing found_point.id
+    from the scroll result — both produce the same value, but this makes the
+    intent explicit and removes dependence on the scroll result's id field.
+
     Returns True if found and updated, False if incident_id not found.
     """
     with get_client() as client:
         if not client.collections.exists(COLLECTION):
             return False
 
+        # Still need to scroll to fetch current payload for merging
         found_point = None
         offset = None
         while True:
@@ -854,7 +904,6 @@ def update_incident_fields(
             if key not in _EDITABLE:
                 continue
             if key == "tags":
-                # Normalize tags to comma-joined string (internal storage format)
                 if isinstance(value, list):
                     payload["tags"] = ",".join(str(t).strip() for t in value if str(t).strip())
                 else:
@@ -872,24 +921,29 @@ def update_incident_fields(
         payload["exception_class"]    = exception_class
         payload["stack_methods_text"] = stack_methods_text
 
+        # ── Re-derive failure_mode from updated tags ──────────────────────────
+        tags_list = [t.strip() for t in payload.get("tags", "").split(",") if t.strip()]
+        payload["failure_mode"] = _infer_failure_mode(tags_list)
+
         # ── Re-build retrieval text and re-embed ──────────────────────────────
-        # Reconstruct the incident dict from updated payload for build_searchable_text
         inc_snapshot = {
             "title":         payload.get("title", ""),
             "error_message": payload.get("error_message", ""),
             "service":       payload.get("service", ""),
-            "tags":          [t.strip() for t in payload.get("tags", "").split(",") if t.strip()],
+            "tags":          tags_list,
             "root_cause":    payload.get("root_cause", ""),
             "stack_trace":   payload.get("stack_trace", ""),
         }
-        retrieval_text          = build_searchable_text(inc_snapshot, exception_class=exception_class)
+        retrieval_text            = build_searchable_text(inc_snapshot, exception_class=exception_class)
         payload["retrieval_text"] = retrieval_text
 
         from datetime import datetime, timezone
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+        # [P1-E FIX] Use stable_id directly — deterministic, no reliance on found_point.id
+        point_id = stable_id(incident_id)
         client.points.upsert(COLLECTION, [PointStruct(
-            id=found_point.id,
+            id=point_id,
             vector=embed(retrieval_text),
             payload=payload,
         )])

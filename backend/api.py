@@ -365,7 +365,13 @@ def _pydantic_errors_to_list(exc: Exception) -> list:
 def health():
     """DB connection + collection status. Used by Railway healthcheck and StatusBar."""
     status = get_status()
-    status["incident_count"] = get_incident_count()
+    # [P1-A FIX] Only call get_incident_count() when collection exists —
+    # avoids opening a second DB connection on every StatusBar poll (every 10s)
+    # when the collection hasn't been seeded yet.
+    if status.get("connected") and status.get("collection_exists"):
+        status["incident_count"] = get_incident_count()
+    else:
+        status["incident_count"] = 0
     return status
 
 
@@ -607,8 +613,8 @@ def search(req: SearchRequest):
 def recurring_failures(top_k: int = 10):
     """
     Detect recurring failure patterns across all indexed incidents.
-    Groups by failure_mode if available, falls back to keyword clustering
-    from title + error_message. Returns the most frequent patterns.
+    Groups by failure_mode stored in payload (set at index time via _infer_failure_mode).
+    Falls back to "other" if not set (pre-patch incidents).
     """
     try:
         incidents = get_all_incidents()
@@ -618,39 +624,28 @@ def recurring_failures(top_k: int = 10):
     if not incidents:
         return {"patterns": [], "total_incidents": 0}
 
-    # ── Keyword-based failure family detection ────────────────────────────────
-    _FAILURE_KEYWORDS = [
-        ("connection pool exhaustion",  ["hikari", "pool", "connection not available", "connection timeout"]),
-        ("memory / OOM",               ["oom", "out of memory", "memory pressure", "heap", "killed"]),
-        ("grpc / timeout",             ["grpc", "deadline exceeded", "timeout", "latency spike"]),
-        ("queue / kafka backlog",       ["kafka", "consumer lag", "queue", "backlog", "batch"]),
-        ("upstream / 5xx cascade",     ["504", "502", "upstream", "gateway", "payment", "cascade"]),
-        ("disk / storage",             ["disk", "storage", "inode", "volume", "full"]),
-        ("auth / token",               ["auth", "token", "jwt", "session", "login", "forbidden"]),
-        ("database / query",           ["database", "query", "slow query", "index", "deadlock", "db"]),
-        ("deployment / rollout",       ["deploy", "rollout", "pod", "restart", "crashloop", "readiness"]),
-        ("search / indexing",          ["search", "elastic", "index", "reindex"]),
-    ]
+    # [P1-F FIX] Removed _detect_family() keyword-based classifier that diverged
+    # from _infer_failure_mode() in vectordb.py, causing /search and /analytics
+    # to return different failure labels for the same incident.
+    # Now uses the failure_mode stored in payload at index time — single source of truth.
+    # Incidents indexed before this fix will have failure_mode="" and fall to "other".
+    # Re-index with POST /index/default to backfill.
+    from vectordb import _infer_failure_mode as _infer
 
-    def _detect_family(inc: dict) -> str:
-        # failure_mode is computed dynamically during search, not stored in payload.
-        # Use keyword matching on title + error_message + root_cause.
-        haystack = " ".join([
-            (inc.get("title") or ""),
-            (inc.get("error_message") or ""),
-            (inc.get("root_cause") or ""),
-        ]).lower()
-
-        for family, keywords in _FAILURE_KEYWORDS:
-            if any(kw in haystack for kw in keywords):
-                return family
-
-        return "other"
+    def _get_family(inc: dict) -> str:
+        # Use stored failure_mode first (set at index time, consistent with /search)
+        stored = (inc.get("failure_mode") or "").strip()
+        if stored:
+            return stored
+        # Fallback for pre-patch incidents: re-derive from stored tags
+        tags = [t.strip() for t in (inc.get("tags") or "").split(",") if t.strip()]
+        derived = _infer(tags)
+        return derived if derived else "other"
 
     from collections import defaultdict
     groups: dict = defaultdict(list)
     for inc in incidents:
-        family = _detect_family(inc)
+        family = _get_family(inc)
         groups[family].append(inc)
 
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}

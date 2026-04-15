@@ -86,6 +86,10 @@ export default function DashboardPanel() {
     </div>
   )
 
+  // [P1-J FIX] Guard against null data — should not happen given loading/error
+  // states above, but prevents crash if response arrives after an unmount/remount.
+  if (!data) return null
+
   const total = data.total_incidents || 1
   const sev   = data.by_severity || {}
 

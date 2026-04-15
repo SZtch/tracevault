@@ -8,11 +8,9 @@
     "start": "next start -p 3000"
   },
   "dependencies": {
-    "framer-motion": "^11.18.2",
     "next": "14.2.5",
     "react": "^18",
-    "react-dom": "^18",
-    "recharts": "^3.8.1"
+    "react-dom": "^18"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.18",
