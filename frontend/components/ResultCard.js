@@ -268,10 +268,12 @@ function ResolveButton({ incidentId }) {
   const [fix,     setFix]     = useState('')
   const [loading, setLoading] = useState(false)
   const [done,    setDone]    = useState(false)
+  const [error,   setError]   = useState('')
 
   async function handleResolve() {
     if (!fix.trim()) return
     setLoading(true)
+    setError('')
     try {
       const res = await fetch(`${API}/incidents/${incidentId}/resolve`, {
         method:  'PATCH',
@@ -279,7 +281,8 @@ function ResolveButton({ incidentId }) {
         body:    JSON.stringify({ resolution_status: 'confirmed', confirmed_fix: fix.trim(), resolved_by: 'ui' }),
       })
       if (res.ok) { setDone(true); setOpen(false) }
-    } catch (e) { console.error(e) }
+      else { setError(`Failed to resolve — server returned ${res.status}`) }
+    } catch (e) { console.error(e); setError('Failed to resolve — network error') }
     finally { setLoading(false) }
   }
 
@@ -323,13 +326,18 @@ function ResolveButton({ incidentId }) {
               {loading ? 'Saving…' : 'Save Fix'}
             </button>
             <button
-              onClick={() => setOpen(false)}
+              onClick={() => { setOpen(false); setError('') }}
               className="font-mono text-[11px] px-3 py-1.5 rounded border"
               style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}
             >
               Cancel
             </button>
           </div>
+          {error && (
+            <p className="font-mono text-[10px]" style={{ color: 'var(--error, #EF4444)', marginTop: '4px' }}>
+              {error}
+            </p>
+          )}
         </div>
       )}
     </div>
