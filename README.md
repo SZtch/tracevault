@@ -74,7 +74,7 @@ Index the 45-incident sample dataset, then try these. Each one targets a real fa
 | `kafka consumer lag growing, batch jobs falling behind` | INC-036, INC-011, INC-030 — queue backlog cluster |
 | `analytics worker OOMKilled, pod keeps restarting` | INC-004, INC-034, INC-037 — OOM/memory cluster |
 
-These use real engineer phrasing, not polished textbook terms. See [`docs/demo.md`](docs/demo.md) for full expected results and a severity-filter smoke test.
+These use real engineer phrasing, not polished textbook terms.
 
 ---
 
@@ -140,7 +140,9 @@ This starts two containers: VectorAI DB on port 50051 and the FastAPI backend on
 **4. Check the backend is up**
 ```bash
 curl http://localhost:8000/health
-# → {"connected": true, "collection_exists": false, ...}
+# → {"connected": true, "collection_exists": true, "incident_count": 45, ...}
+# AUTO_INDEX_DEFAULT=true (set in docker-compose) seeds the dataset on first boot.
+# collection_exists will be true once the backend finishes startup indexing.
 ```
 
 **5. Start the frontend**
