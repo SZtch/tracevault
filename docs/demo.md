@@ -1,6 +1,6 @@
-# TraceVault — Retrieval Demo & Evaluation Guide
+# TraceVault — Retrieval Reference
 
-> If you want to verify the search actually works and isn't just returning random noise, this is the doc.
+> Expected search results and smoke tests for verifying retrieval quality against the built-in 45-incident dataset.
 
 ---
 
@@ -35,7 +35,7 @@ curl -s -X POST http://localhost:8000/search \
   -d '{"query": "<paste query here>", "top_k": 5}' | jq '.results[].title'
 ```
 
-Index the sample data first if you haven't:
+Index the sample data first if it isn't already (auto-indexed locally via docker-compose, or manually on Railway):
 ```bash
 curl -s -X POST http://localhost:8000/index/default | jq .
 # → {"indexed": 45, "source": "sample_dataset", "status": "ok"}

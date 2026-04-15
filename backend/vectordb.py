@@ -561,6 +561,7 @@ def search_incidents(
                 "root_cause":    r.payload.get("root_cause"),
                 "fix":           confirmed_fix or r.payload.get("fix"),
                 "fix_confirmed": confirmed_fix is not None,
+                "stack_trace":   r.payload.get("stack_trace", ""),
                 "service":       r.payload.get("service"),
                 "severity":      r.payload.get("severity"),
                 "date":          r.payload.get("date"),

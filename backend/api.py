@@ -370,6 +370,8 @@ def health():
     # when the collection hasn't been seeded yet.
     if status.get("connected") and status.get("collection_exists"):
         status["incident_count"] = get_incident_count()
+        if status["incident_count"] == 0:
+            status["status_hint"] = "Collection exists but no data indexed yet — POST /index/default to seed sample data."
     else:
         status["incident_count"] = 0
     return status

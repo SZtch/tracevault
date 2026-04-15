@@ -91,8 +91,12 @@ docker compose up --build -d
 # 3. Start the frontend
 cd frontend && npm install && npm run dev   # add NEXT_PUBLIC_API_URL=http://localhost:8000 to frontend/.env.local
 
-# 4. Seed data
-curl -X POST http://localhost:8000/index/default
+# 4. Verify data is indexed
+# docker-compose sets AUTO_INDEX_DEFAULT=true, so the 45-incident sample dataset
+# is indexed automatically on first boot. Confirm it worked:
+curl http://localhost:8000/health
+# Expected: "incident_count": 45, "status_hint": "Ready — collection indexed and searchable."
+# If incident_count is 0, seed manually: curl -X POST http://localhost:8000/index/default
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and try a demo query. Full setup details below.
@@ -265,12 +269,16 @@ Redeploy. The backend will only accept requests from that origin.
 
 ### Step 5 — Seed data
 
+Railway does not set `AUTO_INDEX_DEFAULT=true` by default (that is only in docker-compose for local dev). Seed manually after the backend passes its healthcheck:
+
 ```bash
 curl -X POST https://your-backend.up.railway.app/index/default
 # → {"indexed": 45, "skipped": 0, "duplicate_ids": [], "source": "sample_dataset", "status": "ok"}
 ```
 
 Or use the Index tab in the frontend.
+
+To skip this step on future deploys, add `AUTO_INDEX_DEFAULT=true` to the backend's Railway environment variables — it seeds automatically on first boot if the collection is empty.
 
 ---
 
@@ -282,7 +290,7 @@ Or use the Index tab in the frontend.
 - [ ] Railway: `VECTORAI_DIM=384`
 - [ ] Vercel: `NEXT_PUBLIC_API_URL` set to Railway backend URL
 - [ ] Railway: `FRONTEND_URL` updated to Vercel URL
-- [ ] Data indexed: `POST /index/default` returns `{"indexed": 45}`
+- [ ] Data indexed: `POST /index/default` returned `{"indexed": 45}` (or `AUTO_INDEX_DEFAULT=true` was set)
 
 ---
 
@@ -465,6 +473,7 @@ Webhooks (Slack, PagerDuty) always use `skip_duplicates: true` automatically —
 | `VECTORAI_DB_ADDR` | Backend | `localhost:50051` | gRPC address of VectorAI DB |
 | `VECTORAI_COLLECTION` | Backend | `tracevault_incidents` | Collection name |
 | `VECTORAI_DIM` | Backend | `384` | Embedding dimension |
+| `AUTO_INDEX_DEFAULT` | Backend | `false` | Set to `true` to auto-seed the 45-incident sample dataset on first boot if the collection is empty. Enabled in docker-compose; must be set manually on Railway. |
 | `FRONTEND_URL` | Backend (Railway) | — | Vercel URL — locks CORS in production |
 | `ANTHROPIC_API_KEY` | Backend | — | Enables triage briefs via Claude (optional) |
 | `ANTHROPIC_MODEL` | Backend | `claude-sonnet-4-6` | Anthropic model for triage briefs |
