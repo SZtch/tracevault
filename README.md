@@ -64,7 +64,7 @@ VectorAI DB owns vector storage, the HNSW index, cosine search, and payload filt
 
 ## Demo queries
 
-Index the 45-incident sample dataset, then try these. Each one targets a real failure cluster in the data:
+The 45-incident sample dataset is auto-indexed on boot when using docker compose — no manual step needed. Each query below targets a real failure cluster in the data:
 
 | Query | Expected results |
 |-------|-----------------|
@@ -292,7 +292,7 @@ To skip this step on future deploys, add `AUTO_INDEX_DEFAULT=true` to the backen
 - [ ] Railway: `VECTORAI_DIM=384`
 - [ ] Vercel: `NEXT_PUBLIC_API_URL` set to Railway backend URL
 - [ ] Railway: `FRONTEND_URL` updated to Vercel URL
-- [ ] Data indexed: `POST /index/default` returned `{"indexed": 45}` (or `AUTO_INDEX_DEFAULT=true` was set)
+- [ ] Data indexed: `AUTO_INDEX_DEFAULT=true` set in Railway env (auto-seeds on boot), or `POST /index/default` confirmed `{"indexed": 45}` manually
 
 ---
 
